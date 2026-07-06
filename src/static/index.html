@@ -415,6 +415,7 @@
 <div id="app">
   <header>
     <h1>collectif</h1>
+    <span id="conn-indicator" style="display:none;color:var(--muted);font-size:11px;font-style:italic;margin-left:-6px">reconnecting…</span>
     <div class="stats">
       <div class="stat"><span class="lab">Agents</span><span class="val" id="stat-total">0</span></div>
       <div class="stat act"><span class="dot"></span><span class="lab">Active</span><span class="val" id="stat-active">0</span></div>
@@ -1197,6 +1198,36 @@ function onTermResize() {
   if (termResizeTimer) clearTimeout(termResizeTimer);
   termResizeTimer = setTimeout(() => { termResizeTimer = null; fitTerminalNow(); }, 80);
 }
+let termBackoff = 1000;
+const TERM_BACKOFF_MAX = 15000;
+function connectTerminalWS(id) {
+  // Only (re)connect if we're still mounted for this agent.
+  if (termAgentId !== id || !term) return;
+  // The server flushes the ring buffer as the first frames; after that first
+  // write, scroll to the bottom so the user lands at the current prompt.
+  let justConnected = true;
+  termWS = new WebSocket(wsURL("/ws/session/" + id));
+  termWS.binaryType = "arraybuffer";
+  termWS.onopen = () => { termBackoff = 1000; };
+  termWS.onmessage = (ev) => {
+    if (typeof ev.data === "string") term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+    if (justConnected) {
+      justConnected = false;
+      requestAnimationFrame(() => { if (term) term.scrollToBottom(); });
+    }
+  };
+  const scheduleReconnect = () => {
+    if (termAgentId !== id || !term) return;
+    setTimeout(() => connectTerminalWS(id), termBackoff);
+    termBackoff = Math.min(termBackoff * 2, TERM_BACKOFF_MAX);
+  };
+  termWS.onclose = () => {
+    if (term && termAgentId === id) term.write("\r\n[disconnected, reconnecting…]\r\n");
+    scheduleReconnect();
+  };
+  termWS.onerror = () => { try { termWS.close(); } catch (_) {} };
+}
 function mountTerminalFor(id) {
   if (termAgentId === id && term) return;
   teardownTerminal();
@@ -1206,6 +1237,7 @@ function mountTerminalFor(id) {
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(container);
+  term.scrollToBottom();
   requestAnimationFrame(() => fitTerminalNow());
   window.addEventListener("resize", onTermResize);
   // Watch the container itself so column/panel resizes (not just window
@@ -1215,13 +1247,8 @@ function mountTerminalFor(id) {
   const body = document.getElementById("term-body");
   if (body) termResizeObserver.observe(body);
 
-  termWS = new WebSocket(wsURL("/ws/session/" + id));
-  termWS.binaryType = "arraybuffer";
-  termWS.onmessage = (ev) => {
-    if (typeof ev.data === "string") term.write(ev.data);
-    else term.write(new Uint8Array(ev.data));
-  };
-  termWS.onclose = () => { if (term) term.write("\r\n[disconnected]\r\n"); };
+  termBackoff = 1000;
+  connectTerminalWS(id);
   term.onData((d) => { if (termWS && termWS.readyState === 1) termWS.send(d); });
 }
 
@@ -1284,27 +1311,51 @@ document.querySelector("header h1").onclick = () => {
 };
 
 // ─── Live updates ───────────────────────────────
-const dashWS = new WebSocket(wsURL("/ws/dashboard"));
-dashWS.onmessage = (ev) => {
-  const msg = JSON.parse(ev.data);
-  if (msg.type === "snapshot") {
-    agents.clear();
-    for (const a of msg.agents) agents.set(a.id, a);
-  } else if (msg.type === "upsert") {
-    agents.set(msg.agent.id, msg.agent);
-  } else if (msg.type === "remove") {
-    agents.delete(msg.id);
-    if (selectedId === msg.id) {
-      selectedId = null;
-      teardownTerminal();
+// Reconnecting dashboard WS with exponential backoff (1s → 15s). On reconnect
+// the server sends a fresh `snapshot`, which the existing handler applies —
+// so no extra resync logic is needed.
+let dashWS = null;
+let dashBackoff = 1000;
+const DASH_BACKOFF_MAX = 15000;
+function setConnIndicator(reconnecting) {
+  const el = document.getElementById("conn-indicator");
+  if (el) el.style.display = reconnecting ? "" : "none";
+}
+function connectDashboardWS() {
+  dashWS = new WebSocket(wsURL("/ws/dashboard"));
+  dashWS.onopen = () => {
+    dashBackoff = 1000;
+    setConnIndicator(false);
+  };
+  dashWS.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "snapshot") {
+      agents.clear();
+      for (const a of msg.agents) agents.set(a.id, a);
+    } else if (msg.type === "upsert") {
+      agents.set(msg.agent.id, msg.agent);
+    } else if (msg.type === "remove") {
+      agents.delete(msg.id);
+      if (selectedId === msg.id) {
+        selectedId = null;
+        teardownTerminal();
+      }
     }
-  }
-  renderStats();
-  renderSidebar();
-  renderDashboard();
-  renderTermPanel(false);
-  renderSendPanel();
-};
+    renderStats();
+    renderSidebar();
+    renderDashboard();
+    renderTermPanel(false);
+    renderSendPanel();
+  };
+  const scheduleReconnect = () => {
+    setConnIndicator(true);
+    setTimeout(connectDashboardWS, dashBackoff);
+    dashBackoff = Math.min(dashBackoff * 2, DASH_BACKOFF_MAX);
+  };
+  dashWS.onclose = scheduleReconnect;
+  dashWS.onerror = () => { try { dashWS.close(); } catch (_) {} };
+}
+connectDashboardWS();
 
 // Trend sampling every 5s (also drives dashboard re-render — sparklines need
 // fresh data). Sampling ticks continue running even while an agent is
