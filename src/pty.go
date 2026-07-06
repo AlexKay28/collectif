@@ -23,6 +23,9 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"AGENTCTL_AGENT_ID="+s.ID,
+		"COLLECTIF_AGENT_ID="+s.ID,
+		"COLLECTIF_TOKEN="+authToken,
+		"COLLECTIF_URL=http://"+hookBind+":"+hookPort,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 

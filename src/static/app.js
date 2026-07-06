@@ -152,7 +152,7 @@ function armConfirmButton(btn, opts) {
 // rebuilt every section synchronously. Split into per-section renderers and
 // coalesce dirty sections into a single rAF so bursts of WS messages produce
 // exactly one paint. `scheduleRender('all')` invalidates every section.
-const SECTIONS = ["stats", "sidebar", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term"];
+const SECTIONS = ["stats", "sidebar", "dag", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term"];
 const dirty = new Set();
 let rafPending = false;
 function scheduleRender(section) {
@@ -170,6 +170,7 @@ function flushRender() {
   dirty.clear();
   if (now.has("stats"))         renderStats();
   if (now.has("sidebar"))       renderSidebar();
+  if (now.has("dag"))           renderDAG();
   if (now.has("pending"))       renderPending();
   if (now.has("trends"))        renderTrends();
   if (now.has("tokens"))        renderTokens();
@@ -415,6 +416,121 @@ function renderToolUsage() {
   document.getElementById("dash-tools").innerHTML = toolEntries.length === 0
     ? '<div style="color: var(--muted); font-size: 12px">no tool calls yet</div>'
     : toolEntries.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('');
+}
+
+// ─── Agent DAG (overview) ───────────────────────
+// Layout: recursive Reingold-Tilford-lite. Each subtree computes its total
+// width from its leaves; parents sit centered over their children. Multiple
+// roots (independent user-spawned agents) are laid out side-by-side.
+// Nodes are absolutely-positioned HTML for reuse of the existing CSS;
+// edges are an SVG overlay in the same coordinate space.
+const DAG_NODE_W = 200;
+const DAG_NODE_H = 56;
+const DAG_X_GAP  = 22;
+const DAG_Y_GAP  = 42;
+
+function buildDAGForest() {
+  const arr = Array.from(agents.values());
+  const byId = new Map(arr.map(a => [a.id, a]));
+  const children = new Map();
+  for (const a of arr) {
+    const p = a.parentId && byId.has(a.parentId) ? a.parentId : null;
+    if (!children.has(p)) children.set(p, []);
+    children.get(p).push(a);
+  }
+  for (const [, list] of children) {
+    list.sort((x, y) => (x.createdAt || "").localeCompare(y.createdAt || ""));
+  }
+  const roots = children.get(null) || [];
+  return { roots, children };
+}
+function layoutSubtree(node, children, x, y, positions) {
+  const kids = children.get(node.id) || [];
+  if (kids.length === 0) {
+    positions.set(node.id, { x, y });
+    return DAG_NODE_W;
+  }
+  const childY = y + DAG_NODE_H + DAG_Y_GAP;
+  let childX = x;
+  const widths = [];
+  for (const k of kids) {
+    const w = layoutSubtree(k, children, childX, childY, positions);
+    widths.push(w);
+    childX += w + DAG_X_GAP;
+  }
+  const totalW = widths.reduce((s, w) => s + w, 0) + DAG_X_GAP * (kids.length - 1);
+  positions.set(node.id, { x: x + totalW / 2 - DAG_NODE_W / 2, y });
+  return Math.max(DAG_NODE_W, totalW);
+}
+function renderDAG() {
+  const wrap = document.getElementById("dash-dag-wrap");
+  const host = document.getElementById("dash-dag");
+  const arr = Array.from(agents.values());
+  document.getElementById("dag-count").textContent = arr.length;
+  if (arr.length === 0) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+
+  const { roots, children } = buildDAGForest();
+  const positions = new Map();
+  let cursorX = 0;
+  let maxDepth = 0;
+  const measureDepth = (n, d) => {
+    maxDepth = Math.max(maxDepth, d);
+    for (const k of children.get(n.id) || []) measureDepth(k, d + 1);
+  };
+  for (const r of roots) {
+    const w = layoutSubtree(r, children, cursorX, 0, positions);
+    cursorX += w + DAG_X_GAP * 2;
+    measureDepth(r, 0);
+  }
+  const totalW = Math.max(DAG_NODE_W, cursorX - DAG_X_GAP * 2);
+  const totalH = (maxDepth + 1) * DAG_NODE_H + maxDepth * DAG_Y_GAP;
+
+  const edges = [];
+  for (const a of arr) {
+    if (!a.parentId) continue;
+    const p = positions.get(a.parentId);
+    const c = positions.get(a.id);
+    if (!p || !c) continue;
+    const x1 = p.x + DAG_NODE_W / 2, y1 = p.y + DAG_NODE_H;
+    const x2 = c.x + DAG_NODE_W / 2, y2 = c.y;
+    const mid = (y1 + y2) / 2;
+    edges.push('<path class="edge" d="M ' + x1 + ',' + y1 + ' C ' + x1 + ',' + mid + ' ' + x2 + ',' + mid + ' ' + x2 + ',' + y2 + '" marker-end="url(#dag-arrow)"/>');
+  }
+
+  const nodes = arr.map(a => {
+    const pos = positions.get(a.id);
+    if (!pos) return "";
+    const status = a.status || "idle";
+    const activity = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
+    const cls = "dag-node " + status + (a.pending ? " pending" : "");
+    return (
+      '<div class="' + cls + '" data-id="' + esc(a.id) + '" style="left:' + pos.x + 'px;top:' + pos.y + 'px;width:' + DAG_NODE_W + 'px;height:' + DAG_NODE_H + 'px">' +
+        '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="info">' +
+          '<div class="name">' + esc(agentName(a)) + '</div>' +
+          '<div class="sub">' + esc(activity || cwdBase(a.cwd)) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+
+  host.innerHTML =
+    '<div class="canvas" style="width:' + totalW + 'px;height:' + totalH + 'px">' +
+      '<svg width="' + totalW + '" height="' + totalH + '">' +
+        '<defs>' +
+          '<marker id="dag-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">' +
+            '<path class="arrow" d="M0,0 L0,6 L9,3 z"/>' +
+          '</marker>' +
+        '</defs>' +
+        edges.join('') +
+      '</svg>' +
+      nodes +
+    '</div>';
+
+  host.querySelectorAll(".dag-node").forEach(n => {
+    n.onclick = () => selectAgent(n.dataset.id);
+  });
 }
 
 function renderTrends() {

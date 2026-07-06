@@ -436,3 +436,32 @@ header h1:hover { color: var(--accent); }
 .toast.error   { border-left-color: var(--error); }
 .toast.info    { border-left-color: var(--accent); }
 .toast.success { border-left-color: var(--running); }
+
+/* ─── Agent DAG (overview) ────────────────────────
+   Nodes are absolutely positioned HTML tiles; edges are a full-panel SVG
+   overlay drawn in the same coordinate space. Both sit inside `.dag`. */
+.dag { position: relative; width: 100%; overflow-x: auto; overflow-y: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.dag .canvas { position: relative; }
+.dag svg { position: absolute; top: 0; left: 0; pointer-events: none; }
+.dag svg .edge { fill: none; stroke: var(--border-hi); stroke-width: 1.4; opacity: 0.75; }
+.dag svg .arrow { fill: var(--border-hi); }
+.dag .dag-node {
+  position: absolute; box-sizing: border-box;
+  background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--idle);
+  border-radius: 8px; padding: 8px 10px; cursor: pointer;
+  display: grid; grid-template-columns: 32px 1fr; gap: 8px; align-items: center;
+  transition: border-color 0.1s, background 0.1s;
+}
+.dag .dag-node:hover { background: var(--panel); border-color: var(--border-hi); }
+.dag .dag-node.running   { border-left-color: var(--running); }
+.dag .dag-node.waiting_input { border-left-color: var(--waiting); }
+.dag .dag-node.idle      { border-left-color: var(--idle); }
+.dag .dag-node.error     { border-left-color: var(--error); }
+.dag .dag-node.stopped   { border-left-color: var(--stopped); opacity: 0.6; }
+.dag .dag-node.starting  { border-left-color: var(--accent); }
+.dag .dag-node.pending   { box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.35); animation: pulse-bg 1.6s ease-in-out infinite; }
+.dag .dag-node .avatar { width: 30px; height: 30px; border-width: 1px; }
+.dag .dag-node .info { min-width: 0; }
+.dag .dag-node .info .name { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dag .dag-node .info .sub { color: var(--muted); font-size: 10.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dag .dag-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px; }

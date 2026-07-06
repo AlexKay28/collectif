@@ -33,8 +33,9 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 const maxBodyBytes = 1 << 20
 
 type spawnReq struct {
-	Cwd    string `json:"cwd"`
-	Prompt string `json:"prompt"`
+	Cwd           string `json:"cwd"`
+	Prompt        string `json:"prompt"`
+	ParentAgentID string `json:"parentAgentID"`
 }
 
 func handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -54,12 +55,17 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "cwd is not a directory", http.StatusBadRequest)
 			return
 		}
+		if req.ParentAgentID != "" && getSession(req.ParentAgentID) == nil {
+			http.Error(w, "parentAgentID: unknown agent", http.StatusBadRequest)
+			return
+		}
 
 		agentID := uuid.NewString()
 		sessionID := uuid.NewString()
 		hookTok := uuid.NewString()
 		s := newSession(agentID, sessionID, req.Cwd, req.Prompt)
 		s.HookToken = hookTok
+		s.ParentID = req.ParentAgentID
 
 		settingsDir, settingsFile, err := writeHookSettings(hookURL(hookBind, hookPort, hookTok))
 		if err != nil {

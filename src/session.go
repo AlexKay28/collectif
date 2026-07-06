@@ -66,6 +66,7 @@ type Session struct {
 	ID             string
 	SessionID      string
 	HookToken      string
+	ParentID       string
 	Cwd            string
 	Prompt         string
 	Cmd            *exec.Cmd
@@ -363,6 +364,7 @@ func (s *Session) toJSON() map[string]any {
 		"cacheReadTokens":     s.CacheReadTokens,
 		"cacheCreationTokens": s.CacheCreationTokens,
 		"messageCount":        s.MessageCount,
+		"parentId":            s.ParentID,
 		"createdAt":           s.CreatedAt.Format(time.RFC3339),
 		"updatedAt":           s.UpdatedAt.Format(time.RFC3339),
 	}

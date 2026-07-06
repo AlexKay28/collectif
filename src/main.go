@@ -21,6 +21,10 @@ var staticFS embed.FS
 var authToken string
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "spawn" {
+		runSpawnClient(os.Args[2:])
+		return
+	}
 	setupLogging()
 	port := flag.String("port", "7317", "TCP port to bind on 127.0.0.1")
 	bind := flag.String("bind", "127.0.0.1", "bind address")
