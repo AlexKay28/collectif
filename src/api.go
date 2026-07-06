@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -240,6 +241,28 @@ func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleCwdCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "path required"})
+		return
+	}
+	if !filepath.IsAbs(path) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "path must be absolute"})
+		return
+	}
+	st, err := os.Stat(path)
+	if err != nil || !st.IsDir() {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
