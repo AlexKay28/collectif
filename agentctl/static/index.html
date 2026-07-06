@@ -602,7 +602,7 @@ function cwdBase(cwd) {
   const p = cwd.replace(/\/+$/, "").split("/");
   return p[p.length - 1] || cwd;
 }
-function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
 function fmtNum(n) { return (n || 0).toLocaleString(); }
 // Smallest 1/2.5/5 × 10^k value >= n, with a floor of 1000.
 function barScaleCeil(n) {
@@ -746,10 +746,10 @@ function renderDashboard() {
     if (e.tool) what += ' <span class="tool">' + esc(e.tool) + '</span>';
     if (e.detail) what += ' <span class="det">— ' + esc(e.detail) + '</span>';
     return (
-      '<div class="row' + (isNew ? ' new' : '') + '" data-id="' + e.agent.id + '">' +
+      '<div class="row' + (isNew ? ' new' : '') + '" data-id="' + esc(e.agent.id) + '">' +
         '<div class="t">' + humanTime(e.t) + '</div>' +
         '<div class="who"><div class="avatar"><img src="' + avatarURL(e.agent.id) + '" alt=""></div><span class="n">' + esc(agentName(e.agent)) + '</span></div>' +
-        '<div class="what ' + lvl + '">' + what + '</div>' +
+        '<div class="what ' + esc(lvl) + '">' + what + '</div>' +
       '</div>'
     );
   }).join('');
@@ -779,7 +779,7 @@ function renderDashboard() {
           const tok = (a.inputTokens || 0) + (a.outputTokens || 0);
           const pct = tok <= 0 ? 0 : Math.max(1, Math.round((tok / maxTok) * 100));
           return (
-            '<div class="row" data-id="' + a.id + '">' +
+            '<div class="row" data-id="' + esc(a.id) + '">' +
               '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
               '<div class="track"><div class="fill" style="width:' + pct + '%"></div><span class="lbl">' + esc(agentName(a)) + '</span></div>' +
               '<div class="num">' + fmtNum(tok) + '</div>' +
@@ -912,7 +912,7 @@ function drawSparkline(id, values, opts) {
 // optional single-line tool preview, and the buttons.
 function actionShellHead(a, kind, klass) {
   return (
-    '<div class="action ' + klass + '" data-id="' + a.id + '">' +
+    '<div class="action ' + klass + '" data-id="' + esc(a.id) + '">' +
       '<div class="t">' + humanTime((a.pending && a.pending.at) || (a.askQuestion && a.askQuestion.at) || a.updatedAt) + '</div>' +
       '<div class="who"><div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div><span class="n">' + esc(agentName(a)) + '</span></div>'
   );
@@ -929,8 +929,8 @@ function renderActionPending(a) {
         (p.message ? '<div class="msg">' + esc(p.message) + '</div>' : '') +
         toolLine +
         '<div class="btns">' +
-          '<button class="approve" data-act="approve" data-id="' + a.id + '">✓ Yes</button>' +
-          '<button class="deny"    data-act="deny"    data-id="' + a.id + '">✕ No</button>' +
+          '<button class="approve" data-act="approve" data-id="' + esc(a.id) + '">✓ Yes</button>' +
+          '<button class="deny"    data-act="deny"    data-id="' + esc(a.id) + '">✕ No</button>' +
         '</div>' +
       '</div>' +
     '</div>'
@@ -1041,7 +1041,7 @@ function renderSidebar() {
           (a.pending ? '<span class="pending-badge">Action</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
           '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
-          '<div class="card-status-row"><span class="status-pill ' + (a.status || "idle") + '"><span class="dot"></span>' + (a.status || "idle").replace("_", " ") + '</span></div>' +
+          '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span></div>' +
           (task ? '<div class="card-activity" title="' + esc(task) + '">▸ ' + esc(task) + '</div>' : '') +
           (activityText ? '<div class="card-activity">' + esc(activityText) + '</div>' : '') +
           (tokTotal > 0 ? '<div class="card-token">' + fmtNum(a.inputTokens || 0) + ' in · ' + fmtNum(a.outputTokens || 0) + ' out</div>' : '') +
@@ -1152,7 +1152,7 @@ function renderTermPanel(mountTerminal) {
   document.getElementById("d-name").textContent = agentName(a);
   document.getElementById("d-cwd").textContent = a.cwd;
   const status = a.status || "idle";
-  document.getElementById("d-status").innerHTML = '<span class="status-pill ' + status + '"><span class="dot"></span>' + status.replace("_", " ") + '</span>';
+  document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace("_", " ")) + '</span>';
   const task = a.currentTask || a.prompt || "";
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
 
