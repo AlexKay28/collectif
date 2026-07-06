@@ -713,6 +713,8 @@ function renderSidebar() {
     const task = a.currentTask || a.prompt || "";
     const activityText = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
     const tokTotal = (a.inputTokens || 0) + (a.outputTokens || 0);
+    let childCount = 0;
+    for (const other of agents.values()) if (other.parentId === a.id) childCount++;
     c.innerHTML = (
       '<button class="kill-btn" draggable="false" title="Kill agent">×</button>' +
       '<div class="card-head">' +
@@ -720,6 +722,8 @@ function renderSidebar() {
         '<div class="card-body">' +
           '<div class="card-name"><span class="name">' + esc(agentName(a)) + '</span>' +
           (a.pending ? '<span class="pending-badge">Action</span>' : '') +
+          (childCount > 0 ? '<span class="child-badge" title="Has children">↳ ' + childCount + '</span>' : '') +
+          (a.parentId ? '<span class="parent-badge" title="Has a parent agent">↑</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
           '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
           '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span></div>' +
@@ -836,11 +840,39 @@ function renderTermPanel(mountTerminal) {
   document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace("_", " ")) + '</span>';
   const task = a.currentTask || a.prompt || "";
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
+  renderFamilyLine(a);
 
   if (mountTerminal) mountTerminalFor(a.id);
   // If we didn't remount, the terminal is still bound to the previous agent.
   // Fit again in case the panel resized.
   requestAnimationFrame(() => { fitTerminalNow(); });
+}
+
+// Family strip in the terminal head: ↑ parent · ↳ children. Only visible
+// when the selected agent has a parent or a child; both are clickable to
+// drill into the related agent.
+function renderFamilyLine(a) {
+  const el = document.getElementById("d-family");
+  if (!el) return;
+  const parent = a.parentId ? agents.get(a.parentId) : null;
+  const children = [];
+  for (const other of agents.values()) {
+    if (other.parentId === a.id) children.push(other);
+  }
+  if (!parent && children.length === 0) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "";
+  const chip = (rel, other) =>
+    '<button class="family-chip" data-id="' + esc(other.id) + '" title="' + esc(other.cwd || "") + '">' +
+      rel + ' <span class="mini-avatar"><img src="' + avatarURL(other.id) + '" alt=""></span> ' +
+      esc(agentName(other)) +
+    '</button>';
+  const parts = [];
+  if (parent) parts.push(chip("↑", parent));
+  for (const c of children) parts.push(chip("↳", c));
+  el.innerHTML = parts.join(" ");
+  el.querySelectorAll(".family-chip").forEach(btn => {
+    btn.onclick = () => selectAgent(btn.dataset.id);
+  });
 }
 
 // ─── Embedded terminal ──────────────────────────
