@@ -99,6 +99,15 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if subpath != "" {
+		if subpath == "subagents" {
+			handleSubagentsList(w, r, s)
+			return
+		}
+		if strings.HasPrefix(subpath, "subagents/") {
+			name := strings.TrimPrefix(subpath, "subagents/")
+			handleSubagentByName(w, r, s, name)
+			return
+		}
 		switch subpath {
 		case "input":
 			handleAgentInput(w, r, s)
