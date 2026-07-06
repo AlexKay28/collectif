@@ -33,11 +33,11 @@ type SubagentFile struct {
 // SDEV), so accept mixed case and underscore in addition to the safe subset.
 var subagentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
-// projectAgentsDir walks up from cwd looking for the first `.claude/agents`
-// directory that already exists — this mirrors what Claude Code does when
-// resolving the "project agents" location. If nothing is found anywhere up
-// the tree, fall back to <cwd>/.claude/agents (where a first write would
-// naturally land).
+// projectAgentsDir walks up from cwd looking for the closest `.claude/agents`
+// directory that contains at least one .md file (mirroring what Claude Code
+// does — empty ancestor dirs are skipped). If no ancestor holds any agents,
+// return the closest one that at least exists as an empty dir; otherwise
+// fall back to <cwd>/.claude/agents where a fresh write would land.
 func projectAgentsDir(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
@@ -47,10 +47,16 @@ func projectAgentsDir(cwd string) (string, error) {
 		abs = resolved
 	}
 	dir := abs
+	var firstEmpty string
 	for {
 		cand := filepath.Join(dir, ".claude", "agents")
 		if info, err := os.Stat(cand); err == nil && info.IsDir() {
-			return cand, nil
+			if dirHasAgentFiles(cand) {
+				return cand, nil
+			}
+			if firstEmpty == "" {
+				firstEmpty = cand
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -58,7 +64,23 @@ func projectAgentsDir(cwd string) (string, error) {
 		}
 		dir = parent
 	}
+	if firstEmpty != "" {
+		return firstEmpty, nil
+	}
 	return filepath.Join(abs, ".claude", "agents"), nil
+}
+
+func dirHasAgentFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && !strings.HasPrefix(e.Name(), "_") {
+			return true
+		}
+	}
+	return false
 }
 
 // userAgentsDir returns ~/.claude/agents (may not exist). Returns empty
