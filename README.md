@@ -1,61 +1,65 @@
 # COLLECTIF — agentctl
 
-A single Go binary that spawns Claude Code sessions in PTYs, streams their terminal output to a browser dashboard over WebSocket, and derives live status (`running` / `waiting_input` / `idle` / `error` / `stopped`) from Claude Code's own hooks pushed via HTTP — no output parsing.
+A single Go binary that runs Claude Code sessions in PTYs and streams them to a browser dashboard.
+Monitor multiple agents, answer their prompts, and watch token spend — from one page.
 
-## Build
+## Requirements
 
-```
-cd agentctl
+- **Go 1.21+** — `go version`
+- **Claude Code CLI** on `$PATH` — [install guide](https://docs.claude.com/en/docs/claude-code/quickstart)
+
+## Getting started
+
+```bash
+git clone https://github.com/AlexKay28/Collectif.git
+cd Collectif/agentctl
 go build -o agentctl .
+./agentctl                  # binds 127.0.0.1:7317 by default
 ```
 
-Produces a single static binary with the dashboard HTML/JS embedded via `go:embed`.
-
-## Run
+On startup the server prints an auth token and the URL to use:
 
 ```
-./agentctl                # binds 127.0.0.1:7317
-./agentctl -port 8080     # custom port
+INFO  agentctl listening on http://127.0.0.1:7317
+INFO  Auth token: <token>
+INFO  Open http://127.0.0.1:7317/?token=<token>
 ```
 
-Open http://127.0.0.1:7317 in a browser.
+Open that URL and click **+ New Agent** to spawn your first Claude Code session.
 
-- Click **+ New Agent**, enter an absolute cwd (and an optional initial prompt), Spawn.
-- Tiles color-code by status. Click a tile to open an xterm.js pane bound to the PTY. Type freely; keystrokes go straight to the Claude process.
-- The **Kill** button in the terminal overlay tears the process down.
+## Options
 
-## Security posture (MVP scope)
+```bash
+./agentctl -port 8080                 # custom port
+./agentctl -bind 0.0.0.0              # listen on all interfaces (see below)
+./agentctl -token my-shared-secret    # fixed token instead of random
+```
 
-- Binds `127.0.0.1` only. No auth, no TLS.
-- No persistence: registry is in-memory, gone on restart.
-- The generated hook settings live in `/tmp/agentctl-settings-*` and are removed when the session is deleted.
+**Remote access:** binding to `0.0.0.0` exposes the dashboard on your network. Anyone with the token gets full PTY control of your agents. Prefer an SSH tunnel:
 
-## How status is derived
+```bash
+ssh -L 7317:127.0.0.1:7317 you@server
+# then open http://127.0.0.1:7317/?token=... on your laptop
+```
 
-Each spawn writes a temp `settings.json` that registers HTTP hooks for `SessionStart`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd` pointing at `/api/hooks` on this server. Claude is launched with `--session-id <uuid> --settings <file>` so the session ID is pinned at spawn — no correlation race between PTY spawn and the first hook event.
+## Or use the wrapper
 
-Status mapping (`hooks.go`):
+```bash
+./run.sh                    # from repo root — auto-rebuilds if source changed
+./run.sh -port 8080
+```
 
-| hook event                          | status          |
-|-------------------------------------|-----------------|
-| SessionStart, Pre/PostToolUse       | running         |
-| Notification matcher=permission_prompt | waiting_input |
-| Notification matcher=idle_prompt    | idle            |
-| PostToolUseFailure                  | error           |
-| Stop                                | idle            |
-| SessionEnd, PTY EOF                 | stopped         |
-| PTY exit non-zero                   | error           |
-
-## File layout
+## Layout
 
 ```
 agentctl/
-  main.go              server bootstrap + routing
-  session.go           Session struct, registry, ring buffer, WS pub/sub
-  pty.go               spawn `claude` in a PTY, tee output to ring + subscribers
-  hooks.go             POST /api/hooks -> status transitions
-  ws.go                /ws/session/:id and /ws/dashboard
-  api.go               POST/DELETE /api/agents
-  settings_gen.go      per-spawn settings.json with HTTP hooks
-  static/index.html    dashboard grid + xterm.js pane (loaded from CDN)
+  main.go              server bootstrap, auth, graceful shutdown
+  session.go           Session state + registry
+  pty.go               spawn `claude` in a PTY
+  hooks.go             /api/hooks — status derivation
+  menu.go              detects numbered TUI menus in PTY output
+  transcript.go        token counting from Claude's JSONL transcripts
+  api.go, ws.go        HTTP + WebSocket handlers
+  log.go               colorized log output
+  static/index.html    dashboard (single embedded file)
 ```
