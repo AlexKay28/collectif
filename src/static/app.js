@@ -812,8 +812,12 @@ function connectTerminalWS(id, gen) {
   ws.onopen = () => { termBackoff = 1000; };
   ws.onmessage = (ev) => {
     if (gen !== termGen || !term) return;
-    if (typeof ev.data === "string") term.write(ev.data);
-    else term.write(new Uint8Array(ev.data));
+    if (typeof ev.data === "string") { term.write(ev.data); appendToOutputBuffer(ev.data); }
+    else {
+      const bytes = new Uint8Array(ev.data);
+      term.write(bytes);
+      try { appendToOutputBuffer(new TextDecoder("utf-8", { fatal: false }).decode(bytes)); } catch (_) {}
+    }
     if (justConnected) {
       justConnected = false;
       requestAnimationFrame(() => { if (term && gen === termGen) term.scrollToBottom(); });
@@ -851,7 +855,14 @@ function mountTerminalFor(id) {
     const paste = (ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"))
                || (isMac && ev.metaKey && !ev.ctrlKey && (ev.key === "v" || ev.key === "V"));
     if (copy) {
-      const sel = term.getSelection();
+      // Two selection sources: xterm's internal buffer (when you drag over
+      // the canvas and xterm captures it) or the browser's own selection
+      // (some browsers highlight rendered text natively). Try both.
+      let sel = term.getSelection();
+      if (!sel) {
+        const winSel = window.getSelection && window.getSelection();
+        if (winSel && String(winSel).length > 0) sel = String(winSel);
+      }
       if (!sel) { toast.info("Select text first, then " + (isMac ? "⌘C" : "Ctrl+Shift+C")); return false; }
       copyToClipboard(sel).then(ok => {
         if (ok) toast.success("Copied " + sel.length + " chars");
@@ -1259,6 +1270,40 @@ async function deleteSubagent() {
   closeSubagentModal();
   refreshTeam();
 }
+
+// Copy button — opens a modal with the recent terminal buffer as plain
+// HTML text. Native browser selection + Ctrl+C work there, and a
+// "Copy all" button uses the same execCommand fallback for the whole
+// buffer. This bypasses xterm's finicky selection layer entirely.
+const OUTPUT_BUFFER_MAX = 65536;
+let termOutputBuffer = "";
+function appendToOutputBuffer(chunk) {
+  termOutputBuffer += chunk;
+  if (termOutputBuffer.length > OUTPUT_BUFFER_MAX * 2) {
+    termOutputBuffer = termOutputBuffer.slice(-OUTPUT_BUFFER_MAX);
+  }
+}
+function stripAnsiClient(s) {
+  return String(s)
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "")   // OSC
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")            // CSI
+    .replace(/\x1b[\(\)][A-Za-z0-9]/g, "")             // charset selects
+    .replace(/\x1b[=>NnPMHDEc78]/g, "")                // misc
+    .replace(/\r(?!\n)/g, "\n");                       // lone CR → newline
+}
+document.getElementById("d-copy").onclick = () => {
+  const clean = stripAnsiClient(termOutputBuffer).replace(/^\s+/, "");
+  document.getElementById("output-body").textContent = clean || "(no output yet)";
+  document.getElementById("output-modal").classList.add("show");
+};
+document.getElementById("output-close").onclick = () => document.getElementById("output-modal").classList.remove("show");
+document.getElementById("output-copy-all").onclick = async () => {
+  const text = document.getElementById("output-body").textContent;
+  if (!text) { toast.error("Nothing to copy"); return; }
+  const ok = await copyToClipboard(text);
+  if (ok) toast.success("Copied " + text.length + " chars");
+  else    toast.error("Clipboard write failed — select text in the box and Ctrl+C manually");
+};
 
 document.getElementById("d-team").onclick = openTeam;
 document.getElementById("team-close").onclick = closeTeam;

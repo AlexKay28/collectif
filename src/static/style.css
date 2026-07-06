@@ -488,3 +488,24 @@ header h1:hover { color: var(--accent); }
 .sa-delegates label:hover { background: var(--panel-2); }
 .sa-delegates input[type="checkbox"] { width: auto; margin: 0; }
 .sa-delegates .empty { color: var(--muted); font-size: 11px; padding: 4px; text-transform: none; letter-spacing: 0; }
+
+/* ─── Output-copy modal ────────────────────────
+   xterm's canvas/DOM selection doesn't always cooperate with browser
+   copy. This modal shows the recent terminal buffer as plain HTML so
+   text-select + Ctrl+C works natively. */
+#output-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 55; }
+#output-modal.show { display: flex; }
+#output-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; width: 820px; max-width: 94vw; max-height: 84vh; display: flex; flex-direction: column; }
+#output-modal .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+#output-modal .head h3 { margin: 0; font-size: 13px; }
+#output-modal .head .spacer { flex: 1; }
+#output-modal .head .hint { color: var(--muted); font-size: 11px; }
+#output-modal pre {
+  margin: 0; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px;
+  font: 11.5px/1.4 ui-monospace, monospace; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  flex: 1; overflow-y: auto; min-height: 200px;
+  user-select: text; -webkit-user-select: text;
+  cursor: text;
+}
