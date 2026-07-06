@@ -798,7 +798,38 @@ function mountTerminalFor(id) {
   teardownTerminal();
   termAgentId = id;
   const container = document.getElementById("term-container");
-  term = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, theme: { background: "#000000" } });
+  term = new Terminal({
+    cursorBlink: true,
+    fontFamily: "ui-monospace, Menlo, monospace",
+    fontSize: 13,
+    theme: { background: "#000000" },
+    rightClickSelectsWord: true,
+  });
+  // Copy on Ctrl+Shift+C / Cmd+C when a selection exists (falls through to
+  // PTY otherwise, so Ctrl+C keeps sending SIGINT to a running process).
+  // Paste on Ctrl+Shift+V / Cmd+V by writing clipboard bytes to the PTY.
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== "keydown") return true;
+    const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+    const copy = (ev.ctrlKey && ev.shiftKey && (ev.key === "C" || ev.key === "c"))
+              || (isMac && ev.metaKey && (ev.key === "c" || ev.key === "C"));
+    const paste = (ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"))
+               || (isMac && ev.metaKey && (ev.key === "v" || ev.key === "V"));
+    if (copy) {
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel).catch(() => {});
+        return false;
+      }
+    }
+    if (paste) {
+      navigator.clipboard.readText().then(t => {
+        if (t && termWS && termWS.readyState === 1) termWS.send(t);
+      }).catch(() => {});
+      return false;
+    }
+    return true;
+  });
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(container);
