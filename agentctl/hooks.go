@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -37,9 +38,25 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ht := r.URL.Query().Get("ht")
+	if ht == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s := getSessionByHookToken(ht)
+	if s == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 	var p hookPayload
@@ -48,11 +65,8 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s := getSessionBySID(p.SessionID)
-	if s == nil {
-		log.Printf("hook: unknown session_id=%s event=%s", p.SessionID, p.HookEventName)
-		w.WriteHeader(http.StatusOK)
-		return
+	if p.SessionID != "" && p.SessionID != s.SessionID {
+		log.Printf("hook: session_id mismatch ht=%s got=%s want=%s", ht, p.SessionID, s.SessionID)
 	}
 	if p.TranscriptPath != "" && s.TranscriptPath == "" {
 		s.mu.Lock()

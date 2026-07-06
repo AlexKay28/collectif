@@ -62,6 +62,6 @@ func writeHookSettings(hookURL string) (settingsDir, settingsFile string, err er
 	return dir, f, nil
 }
 
-func hookURL(bind, port string) string {
-	return fmt.Sprintf("http://%s:%s/api/hooks", bind, port)
+func hookURL(bind, port, hookToken string) string {
+	return fmt.Sprintf("http://%s:%s/api/hooks?ht=%s", bind, port, hookToken)
 }
