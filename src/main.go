@@ -45,6 +45,7 @@ func main() {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/agents", handleAgents)
 	mux.HandleFunc("/api/agents/", handleAgentByID)
+	mux.HandleFunc("/api/cwd/check", handleCwdCheck)
 	mux.HandleFunc("/api/hooks", handleHook)
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
