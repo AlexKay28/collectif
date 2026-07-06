@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -29,8 +30,14 @@ func main() {
 
 	if *tokenFlag != "" {
 		authToken = *tokenFlag
+		_ = saveTokenFile(authToken)
+	} else if t, err := loadTokenFile(); err == nil && t != "" {
+		authToken = t
 	} else {
 		authToken = randomToken(24)
+		if err := saveTokenFile(authToken); err != nil {
+			log.Printf("warn: could not persist token: %v", err)
+		}
 	}
 
 	hookBind = *bind
@@ -73,6 +80,44 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// tokenFilePath returns the location of the persisted auth token — mode 0600,
+// under $XDG_CONFIG_HOME/collectif/token (or ~/.config/collectif/token as
+// the XDG fallback). Delete this file to rotate the token on next start.
+func tokenFilePath() (string, error) {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "collectif", "token"), nil
+}
+
+func loadTokenFile() (string, error) {
+	p, err := tokenFilePath()
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func saveTokenFile(t string) error {
+	p, err := tokenFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(t+"\n"), 0o600)
 }
 
 func randomToken(n int) string {
