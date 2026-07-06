@@ -477,49 +477,30 @@ header h1:hover { color: var(--accent); }
 .family-chip .mini-avatar { width: 14px; height: 14px; border-radius: 50%; overflow: hidden; display: inline-block; background: var(--panel-2); border: 1px solid var(--border); }
 .family-chip .mini-avatar img { width: 100%; height: 100%; display: block; }
 
-/* ─── Sub-agent strip (terminal head): chip per child + per-chip actions
-   Each entry: avatar · name · [tail] [send] [kill]. Matches the CLI verbs
-   the parent could invoke from its own shell — this is just a shortcut. */
-.term-head .subagents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.subagent-chip {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-  padding: 2px 4px 2px 6px; display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px;
+/* ─── Sub-agents info panel (terminal head): one row per direct child
+   showing status + task + tokens. Read-only; click a row to drill into
+   that child. No control lives here — control belongs to the parent's
+   own conversation with Claude, not to a button strip. */
+.term-head .subagents { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; padding: 4px 0; border-top: 1px solid var(--border); }
+.term-head .subagents .sa-lab { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 0 2px 2px; }
+.subagent-row {
+  display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center;
+  padding: 3px 4px; border-radius: 5px; cursor: pointer;
+  font-size: 11.5px;
 }
-.subagent-chip .sa-avatar { width: 14px; height: 14px; border-radius: 50%; overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); flex: 0 0 auto; }
-.subagent-chip .sa-avatar img { width: 100%; height: 100%; display: block; }
-.subagent-chip .sa-name { color: var(--text); cursor: pointer; padding: 0 3px; }
-.subagent-chip .sa-name:hover { color: var(--accent); }
-.subagent-chip .sa-actions { display: inline-flex; gap: 2px; }
-.subagent-chip .sa-actions button {
-  padding: 1px 6px; font-size: 10px; border-radius: 8px; background: transparent;
-  border: 1px solid var(--border); color: var(--muted); line-height: 1.3;
-}
-.subagent-chip .sa-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--border-hi); }
-.subagent-chip .sa-actions button.k:hover:not(:disabled) { color: #fff; background: var(--error); border-color: var(--error); }
-.subagent-chip .sa-actions button.confirming { color: #fff; background: var(--error); border-color: var(--error); }
-.subagent-chip.starting  { border-color: var(--accent); }
-.subagent-chip.running   { border-color: var(--running); }
-.subagent-chip.waiting_input { border-color: var(--waiting); }
-.subagent-chip.error     { border-color: var(--error); }
-.subagent-chip.stopped   { opacity: 0.55; }
-
-/* ─── Tail viewer modal ────────────────────────── */
-#tail-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 40; }
-#tail-modal.show { display: flex; }
-#tail-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; width: 720px; max-width: 92vw; max-height: 80vh; display: flex; flex-direction: column; }
-#tail-modal .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-#tail-modal .head h3 { margin: 0; font-size: 13px; }
-#tail-modal .head .spacer { flex: 1; }
-#tail-modal pre { margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font: 11.5px/1.4 ui-monospace, monospace; color: var(--text); white-space: pre-wrap; word-break: break-word; flex: 1; overflow-y: auto; min-height: 200px; }
-
-/* ─── Send-to-child modal ──────────────────────── */
-#send-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 40; }
-#send-modal.show { display: flex; }
-#send-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 480px; max-width: 90vw; }
-#send-modal input { width: 100%; margin-top: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: 12.5px ui-monospace, monospace; }
-#send-modal input:focus { outline: none; border-color: var(--accent); }
-#send-modal .actions { margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
+.subagent-row:hover { background: var(--panel-2); }
+.subagent-row .sa-avatar { width: 18px; height: 18px; border-radius: 50%; overflow: hidden; background: var(--panel-2); border: 1px solid var(--border); flex: 0 0 auto; }
+.subagent-row .sa-avatar img { width: 100%; height: 100%; display: block; }
+.subagent-row .sa-info { min-width: 0; overflow: hidden; }
+.subagent-row .sa-name { font-weight: 600; color: var(--text); }
+.subagent-row .sa-info .sa-desc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.subagent-row .sa-info .sa-desc .sa-task { color: var(--text); }
+.subagent-row .sa-tok { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; text-align: right; }
+.subagent-row.starting  .sa-name { color: var(--accent); }
+.subagent-row.running   .sa-name { color: var(--running); }
+.subagent-row.waiting_input .sa-name { color: var(--waiting); }
+.subagent-row.error     .sa-name { color: var(--error); }
+.subagent-row.stopped   { opacity: 0.55; }
 
 /* ─── Sidebar card parent/child badges ─────────── */
 .child-badge, .parent-badge {
