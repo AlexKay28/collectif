@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// Cap inbound WS frames at 1 MB. PTY input is at most a paste — a hostile
+// client shouldn't be able to stream unbounded data straight into a shell.
+const wsReadLimit = 1 << 20
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -25,17 +30,23 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	c.SetReadLimit(wsReadLimit)
+	sub := s.addSub(c)
+	defer s.removeSub(sub)
 
-	// Flush scrollback so the new client sees prior output.
+	// Flush scrollback so the new client sees prior output — go through the
+	// per-sub queue so it's serialized with future broadcasts.
 	if snap := s.snapshotRing(); len(snap) > 0 {
-		_ = c.WriteMessage(websocket.BinaryMessage, snap)
+		sub.send(snap)
 	}
-	s.addSub(c)
-	defer func() {
-		s.removeSub(c)
-		_ = c.Close()
-	}()
 
+	// Read pump — nothing to write back; input goes straight to the PTY.
+	// A dead-client detection ping keeps the read loop honest.
+	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.SetPongHandler(func(string) error {
+		_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 	for {
 		mt, data, err := c.ReadMessage()
 		if err != nil {
@@ -56,19 +67,21 @@ func handleDashboardWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	addDashSub(c)
-	defer func() {
-		removeDashSub(c)
-		_ = c.Close()
-	}()
+	c.SetReadLimit(wsReadLimit)
+	sub := addDashSub(c)
+	defer removeDashSub(sub)
 
-	// Send initial snapshot.
-	snap := map[string]any{"type": "snapshot", "agents": allSessionsJSON()}
-	if b, err := json.Marshal(snap); err == nil {
-		_ = c.WriteMessage(websocket.TextMessage, b)
+	// Send initial snapshot via the per-sub queue so ordering is preserved.
+	if b, err := json.Marshal(map[string]any{"type": "snapshot", "agents": allSessionsJSON()}); err == nil {
+		sub.send(b)
 	}
 
 	// Keep the conn open; ignore inbound (dashboard is read-only for now).
+	_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.SetPongHandler(func(string) error {
+		_ = c.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 	for {
 		if _, _, err := c.ReadMessage(); err != nil {
 			return

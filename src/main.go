@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"flag"
 	"io/fs"
@@ -162,14 +163,25 @@ func checkToken(r *http.Request) bool {
 	if authToken == "" {
 		return false
 	}
-	if q := r.URL.Query().Get("token"); q != "" && q == authToken {
+	if q := r.URL.Query().Get("token"); q != "" && sameToken(q, authToken) {
 		return true
 	}
 	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") && strings.TrimPrefix(h, "Bearer ") == authToken {
+	if strings.HasPrefix(h, "Bearer ") && sameToken(strings.TrimPrefix(h, "Bearer "), authToken) {
 		return true
 	}
 	return false
+}
+
+// sameToken compares two secrets in constant time so a network attacker
+// can't leak the token one character at a time via response-timing analysis.
+// crypto/subtle.ConstantTimeCompare requires equal-length inputs, so we
+// short-circuit on length mismatch first (which is public information).
+func sameToken(got, want string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func shutdownAllSessions(grace time.Duration) {

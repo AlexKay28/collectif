@@ -120,9 +120,8 @@ type Session struct {
 	ring     []byte
 	ringLen  int
 	ringHead int
-	subs     map[*websocket.Conn]bool
+	subs     map[*wsSub]bool
 	subMu    sync.Mutex
-	closed   bool
 }
 
 func newSession(id, sid, cwd, prompt string) *Session {
@@ -140,7 +139,7 @@ func newSession(id, sid, cwd, prompt string) *Session {
 		TaskHistory: nil,
 		Activity:    nil,
 		ring:        make([]byte, ringSize),
-		subs:        make(map[*websocket.Conn]bool),
+		subs:        make(map[*wsSub]bool),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -181,37 +180,101 @@ func (s *Session) snapshotRing() []byte {
 	return out[i+1:]
 }
 
-func (s *Session) addSub(c *websocket.Conn) {
-	s.subMu.Lock()
-	defer s.subMu.Unlock()
-	s.subs[c] = true
+// wsSub wraps a websocket.Conn with an outbound queue + a writer goroutine.
+// The producer (hook handler, PTY reader) never blocks — it either enqueues
+// or drops when the queue is full, which prevents a single slow client from
+// stalling everyone else. See issue #21.
+type wsSub struct {
+	c      *websocket.Conn
+	out    chan []byte
+	closed chan struct{}
+	kind   int // websocket.TextMessage or websocket.BinaryMessage
 }
 
-func (s *Session) removeSub(c *websocket.Conn) {
+func newWSSub(c *websocket.Conn, kind, queue int) *wsSub {
+	sub := &wsSub{c: c, out: make(chan []byte, queue), closed: make(chan struct{}), kind: kind}
+	go sub.pump()
+	return sub
+}
+
+func (w *wsSub) pump() {
+	for msg := range w.out {
+		if err := w.c.WriteMessage(w.kind, msg); err != nil {
+			w.stop()
+			return
+		}
+	}
+}
+
+// send tries to enqueue; drops the message if the queue is full, meaning
+// the client is behind. Dropped bytes for the terminal show up as a gap
+// in scrollback (which reconnect solves); dropped dashboard patches are
+// non-fatal because state is fully re-broadcast on the next event.
+func (w *wsSub) send(msg []byte) bool {
+	select {
+	case w.out <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *wsSub) stop() {
+	select {
+	case <-w.closed:
+		return
+	default:
+	}
+	close(w.closed)
+	close(w.out)
+	_ = w.c.Close()
+}
+
+const (
+	// Per-connection outbound queue depth. Bigger = tolerate longer pauses;
+	// smaller = tighter memory bound on stalled clients.
+	sessionQueueDepth = 256 // ~8 MB with 32 KB PTY chunks
+	dashQueueDepth    = 64
+)
+
+func (s *Session) addSub(c *websocket.Conn) *wsSub {
+	sub := newWSSub(c, websocket.BinaryMessage, sessionQueueDepth)
 	s.subMu.Lock()
-	defer s.subMu.Unlock()
-	delete(s.subs, c)
+	s.subs[sub] = true
+	s.subMu.Unlock()
+	return sub
+}
+
+func (s *Session) removeSub(sub *wsSub) {
+	s.subMu.Lock()
+	delete(s.subs, sub)
+	s.subMu.Unlock()
+	sub.stop()
 }
 
 func (s *Session) broadcastBytes(p []byte) {
 	s.subMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.subs))
-	for c := range s.subs {
-		conns = append(conns, c)
+	subs := make([]*wsSub, 0, len(s.subs))
+	for sub := range s.subs {
+		subs = append(subs, sub)
 	}
 	s.subMu.Unlock()
-	for _, c := range conns {
-		_ = c.WriteMessage(websocket.BinaryMessage, p)
+	for _, sub := range subs {
+		sub.send(p)
 	}
 }
 
 func (s *Session) closeSubs() {
 	s.subMu.Lock()
-	defer s.subMu.Unlock()
-	for c := range s.subs {
-		_ = c.Close()
+	subs := make([]*wsSub, 0, len(s.subs))
+	for sub := range s.subs {
+		subs = append(subs, sub)
 	}
-	s.subs = make(map[*websocket.Conn]bool)
+	s.subs = make(map[*wsSub]bool)
+	s.subMu.Unlock()
+	for _, sub := range subs {
+		sub.stop()
+	}
 }
 
 func (s *Session) appendActivity(e ActivityEntry) {
@@ -470,34 +533,81 @@ func (s *Session) touch() {
 // dashboard subscribers
 var (
 	dashMu   sync.Mutex
-	dashSubs = map[*websocket.Conn]bool{}
+	dashSubs = map[*wsSub]bool{}
 )
 
-func addDashSub(c *websocket.Conn) {
+func addDashSub(c *websocket.Conn) *wsSub {
+	sub := newWSSub(c, websocket.TextMessage, dashQueueDepth)
 	dashMu.Lock()
-	dashSubs[c] = true
+	dashSubs[sub] = true
 	dashMu.Unlock()
+	return sub
 }
 
-func removeDashSub(c *websocket.Conn) {
+func removeDashSub(sub *wsSub) {
 	dashMu.Lock()
-	delete(dashSubs, c)
+	delete(dashSubs, sub)
 	dashMu.Unlock()
+	sub.stop()
 }
 
-func broadcastDashboard(msg map[string]any) {
+func broadcastDashboardRaw(msg map[string]any) {
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}
 	dashMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(dashSubs))
-	for c := range dashSubs {
-		conns = append(conns, c)
+	subs := make([]*wsSub, 0, len(dashSubs))
+	for sub := range dashSubs {
+		subs = append(subs, sub)
 	}
 	dashMu.Unlock()
-	for _, c := range conns {
-		_ = c.WriteMessage(websocket.TextMessage, b)
+	for _, sub := range subs {
+		sub.send(b)
+	}
+}
+
+// broadcastDashboard is the public entry point — coalesces multiple upsert
+// events for the same session into a single broadcast per ~50ms window.
+// Non-upsert events (snapshot, remove) go through immediately.
+func broadcastDashboard(msg map[string]any) {
+	if t, _ := msg["type"].(string); t == "upsert" {
+		if agent, ok := msg["agent"].(map[string]any); ok {
+			if id, ok := agent["id"].(string); ok && id != "" {
+				coalesceUpsert(id, agent)
+				return
+			}
+		}
+	}
+	broadcastDashboardRaw(msg)
+}
+
+// Coalesced upserts: keep only the freshest agent snapshot per id and flush
+// once every ~50ms. See issue #22.
+var (
+	coalesceMu     sync.Mutex
+	coalescePend   = map[string]map[string]any{}
+	coalesceTimer  *time.Timer
+	coalesceWindow = 50 * time.Millisecond
+)
+
+func coalesceUpsert(id string, agent map[string]any) {
+	coalesceMu.Lock()
+	coalescePend[id] = agent
+	if coalesceTimer == nil {
+		coalesceTimer = time.AfterFunc(coalesceWindow, flushCoalescedUpserts)
+	}
+	coalesceMu.Unlock()
+}
+
+func flushCoalescedUpserts() {
+	coalesceMu.Lock()
+	batch := coalescePend
+	coalescePend = map[string]map[string]any{}
+	coalesceTimer = nil
+	coalesceMu.Unlock()
+	for _, agent := range batch {
+		broadcastDashboardRaw(map[string]any{"type": "upsert", "agent": agent})
 	}
 }
 
