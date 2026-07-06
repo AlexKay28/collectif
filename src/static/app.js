@@ -1084,19 +1084,11 @@ setInterval(() => {
 sampleTrend();
 scheduleRender("all");
 
-// ─── Team designer: subagent CRUD + inline DAG panel ──
-// Right-column panel (replaces overview metrics when an agent is selected)
-// showing a DAG of subagent configs from <cwd>/.claude/agents/*.md.
-// A special root node represents the selected session itself; every
-// otherwise-orphan subagent implicitly hangs under it. Edges between
-// subagents come from each file's `subagents:` frontmatter field.
-const TEAM_NODE_W = 200;
-const TEAM_NODE_H = 72;
-const TEAM_ROOT_H = 56;
-const TEAM_X_GAP = 18;
-const TEAM_Y_GAP = 36;
-const TEAM_PADDING = 16;
-const ROOT_ID = "__self__";
+// ─── Team designer: subagent CRUD + inline tree panel ──
+// Right-column panel showing subagent configs from .claude/agents/*.md as a
+// compact indented tree — root row = the selected session, subagents laid
+// out below with left padding proportional to depth. Fits any width; no
+// horizontal scroll. Edges come from each file's `subagents:` frontmatter.
 let teamSubagents = [];   // last-loaded array of SubagentFile
 let teamEditingName = ""; // "" when creating, else the name being edited
 let teamCurrentSelection = null; // last agent id we loaded team for
@@ -1162,8 +1154,6 @@ function renderTeamCanvas() {
   if (!a) return;
 
   if (teamSubagents.length === 0) {
-    // Still show the root node representing the selected agent, plus the
-    // empty-state prompt encouraging first subagent creation.
     canvas.style.display = "none";
     empty.style.display = "flex";
     return;
@@ -1171,8 +1161,7 @@ function renderTeamCanvas() {
   canvas.style.display = "block";
   empty.style.display = "none";
 
-  // Build the subagent graph, then insert a synthetic ROOT node (= the
-  // selected agent) as parent of every subagent that no one else references.
+  // Build parent → children map.
   const byName = new Map(teamSubagents.map(sf => [sf.name, sf]));
   const childrenOf = new Map();
   const hasParent = new Set();
@@ -1184,94 +1173,55 @@ function renderTeamCanvas() {
       hasParent.add(child);
     }
   }
-  const orphans = teamSubagents.filter(sf => !hasParent.has(sf.name)).map(sf => sf.name);
-  const rootKids = orphans.length > 0 ? orphans : teamSubagents.map(sf => sf.name).slice(0, 1);
-  childrenOf.set(ROOT_ID, rootKids);
+  const roots = teamSubagents.filter(sf => !hasParent.has(sf.name)).map(sf => sf.name);
+  if (roots.length === 0 && teamSubagents.length > 0) roots.push(teamSubagents[0].name);
 
-  const positions = new Map();
+  // Flatten to an ordered list with depth + last-child flag for tree lines.
+  const rows = [];
   const visited = new Set();
-  function layout(name, x, y, nodeH) {
-    if (visited.has(name)) return TEAM_NODE_W;
+  function walk(name, depth, isLast) {
+    if (visited.has(name)) return;
     visited.add(name);
+    const sf = byName.get(name);
+    if (!sf) return;
+    rows.push({ sf, depth, isLast });
     const kids = (childrenOf.get(name) || []).filter(k => !visited.has(k));
-    if (kids.length === 0) {
-      positions.set(name, { x, y });
-      return TEAM_NODE_W;
-    }
-    const childY = y + nodeH + TEAM_Y_GAP;
-    let cursorX = x;
-    const widths = [];
-    for (const k of kids) {
-      const w = layout(k, cursorX, childY, TEAM_NODE_H);
-      widths.push(w);
-      cursorX += w + TEAM_X_GAP;
-    }
-    const total = widths.reduce((s, w) => s + w, 0) + TEAM_X_GAP * (kids.length - 1);
-    positions.set(name, { x: x + total / 2 - TEAM_NODE_W / 2, y });
-    return Math.max(TEAM_NODE_W, total);
+    kids.forEach((k, i) => walk(k, depth + 1, i === kids.length - 1));
   }
-  const totalW = Math.max(TEAM_NODE_W + 2 * TEAM_PADDING,
-                          layout(ROOT_ID, TEAM_PADDING, TEAM_PADDING, TEAM_ROOT_H) + 2 * TEAM_PADDING);
-  let maxDepth = 0;
-  const depth = (name, d) => {
-    maxDepth = Math.max(maxDepth, d);
-    for (const k of (childrenOf.get(name) || [])) depth(k, d + 1);
-  };
-  depth(ROOT_ID, 0);
-  const totalH = TEAM_PADDING * 2 + TEAM_ROOT_H + TEAM_Y_GAP + maxDepth * (TEAM_NODE_H + TEAM_Y_GAP);
+  roots.forEach(r => walk(r, 1, roots.indexOf(r) === roots.length - 1));
+  for (const sf of teamSubagents) {
+    if (!visited.has(sf.name)) walk(sf.name, 1, false);
+  }
 
-  const edges = [];
-  for (const [parent, kids] of childrenOf) {
-    const p = positions.get(parent);
-    if (!p) continue;
-    const pH = parent === ROOT_ID ? TEAM_ROOT_H : TEAM_NODE_H;
-    for (const kid of kids) {
-      const c = positions.get(kid);
-      if (!c) continue;
-      const x1 = p.x + TEAM_NODE_W / 2, y1 = p.y + pH;
-      const x2 = c.x + TEAM_NODE_W / 2, y2 = c.y;
-      const mid = (y1 + y2) / 2;
-      edges.push('<path class="edge" d="M ' + x1 + ',' + y1 + ' C ' + x1 + ',' + mid + ' ' + x2 + ',' + mid + ' ' + x2 + ',' + y2 + '" marker-end="url(#team-arrow)"/>');
-    }
-  }
-  const rootPos = positions.get(ROOT_ID);
-  const rootNodeHTML = rootPos ? (
-    '<div class="team-node root" style="left:' + rootPos.x + 'px;top:' + rootPos.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_ROOT_H + 'px">' +
+  const rootHTML = (
+    '<div class="team-root">' +
       '<div class="lab">Current session</div>' +
       '<div class="head">' +
         '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="name">' + esc(agentName(a)) + '</div>' +
       '</div>' +
     '</div>'
-  ) : "";
-  const subNodesHTML = teamSubagents.map(sf => {
-    const p = positions.get(sf.name);
-    if (!p) return "";
-    const toolsBadge = (sf.tools || []).length > 0 ? '<span class="badge">' + esc((sf.tools || []).length + " tool" + ((sf.tools || []).length === 1 ? "" : "s")) + '</span>' : "";
+  );
+  const treeHTML = '<div class="team-tree">' + rows.map(({ sf, depth, isLast }) => {
     const modelBadge = sf.model ? '<span class="badge model">' + esc(sf.model) + '</span>' : "";
-    const scopeBadge = sf.scope ? '<span class="badge scope ' + esc(sf.scope) + '" title="' + (sf.scope === "user" ? "~/.claude/agents/ (shared across all your projects)" : "&lt;cwd&gt;/.claude/agents/") + '">' + esc(sf.scope) + '</span>' : "";
-    const scopeClass = sf.scope === "user" ? " user-scope" : "";
+    const scopeBadge = sf.scope ? '<span class="badge scope ' + esc(sf.scope) + '" title="' + (sf.scope === "user" ? "~/.claude/agents/ (shared across all your projects)" : "project-scoped .claude/agents/") + '">' + esc(sf.scope) + '</span>' : "";
+    const indent = depth * 14 + 8;
     return (
-      '<div class="team-node' + scopeClass + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_NODE_H + 'px">' +
-        '<div class="name">' + esc(sf.name) + '</div>' +
-        '<div class="desc">' + esc(sf.description || "") + '</div>' +
-        '<div class="badges">' + modelBadge + toolsBadge + scopeBadge + '</div>' +
+      '<div class="tree-row' + (isLast ? " last" : "") + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="padding-left:' + indent + 'px;--d:' + depth + '">' +
+        '<div class="tree-info">' +
+          '<div class="tree-line1">' +
+            '<span class="name">' + esc(sf.name) + '</span>' +
+            (sf.description ? '<span class="desc">— ' + esc(sf.description) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="tree-badges">' + modelBadge + scopeBadge + '</div>' +
       '</div>'
     );
-  }).join("");
+  }).join("") + '</div>';
 
-  canvas.innerHTML = (
-    '<div class="canvas-inner" style="width:' + totalW + 'px;height:' + totalH + 'px">' +
-      '<svg width="' + totalW + '" height="' + totalH + '">' +
-        '<defs><marker id="team-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path class="arrow" d="M0,0 L0,6 L9,3 z"/></marker></defs>' +
-        edges.join('') +
-      '</svg>' +
-      rootNodeHTML +
-      subNodesHTML +
-    '</div>'
-  );
-  canvas.querySelectorAll(".team-node[data-name]").forEach(n => {
-    n.onclick = () => openSubagentModal(n.dataset.name, n.dataset.scope);
+  canvas.innerHTML = rootHTML + treeHTML;
+  canvas.querySelectorAll(".tree-row[data-name]").forEach(r => {
+    r.onclick = () => openSubagentModal(r.dataset.name, r.dataset.scope);
   });
 }
 
