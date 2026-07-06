@@ -42,11 +42,10 @@ func writeHookSettings(hookURL string) (settingsDir, settingsFile string, err er
 			"PostToolUse":        []map[string]any{hook("PostToolUse")},
 			"PostToolUseFailure": []map[string]any{hook("PostToolUseFailure")},
 			"Stop":               []map[string]any{hook("Stop")},
-			"Notification": []map[string]any{
-				notifHook("permission_prompt"),
-				notifHook("idle_prompt"),
-				notifHook("*"),
-			},
+			// A single wildcard matcher — we don't know the exact set of
+			// notification types Claude Code sends, so catch them all and
+			// classify server-side from the message content.
+			"Notification": []map[string]any{notifHook("*")},
 		},
 	}
 

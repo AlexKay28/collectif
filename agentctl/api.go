@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/google/uuid"
 )
 
@@ -83,13 +84,14 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		case "input":
 			handleAgentInput(w, r, s)
 		case "approve":
-			// Claude Code's permission menu is a select list — press "1"
-			// (highlights + confirms "Yes" in most builds), then \r as
-			// a belt-and-braces confirm for prompts that need Enter.
-			handleAgentTimedKeys(w, r, s, []string{"1", "\r"}, 120*time.Millisecond)
+			// Send the literal word — works for y/n prompts and for
+			// Claude's ink-select menus (typing filters to items matching
+			// "yes", then Enter confirms the highlighted "Yes").
+			handleAgentTimedKeys(w, r, s, []string{"yes\r"}, 0)
 		case "deny":
-			// Escape is the universal cancel across Claude Code's TUI prompts.
-			handleAgentTimedKeys(w, r, s, []string{"\x1b"}, 0)
+			handleAgentTimedKeys(w, r, s, []string{"no\r"}, 0)
+		case "resize":
+			handleAgentResize(w, r, s)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}
@@ -173,6 +175,39 @@ func handleAgentTimedKeys(w http.ResponseWriter, r *http.Request, s *Session, ch
 	}()
 	s.clearPending()
 	s.touch()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type resizeReq struct {
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
+}
+
+// handleAgentResize updates the PTY window size so Claude Code re-renders at
+// the new dimensions. Without this, resizing the browser panel makes the
+// terminal contents garbled — Claude keeps drawing at the original 40×120.
+func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.PTY == nil {
+		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
+		return
+	}
+	var req resizeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Cols < 20 || req.Rows < 5 || req.Cols > 500 || req.Rows > 300 {
+		http.Error(w, "cols/rows out of range", http.StatusBadRequest)
+		return
+	}
+	if err := pty.Setsize(s.PTY, &pty.Winsize{Rows: req.Rows, Cols: req.Cols}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -36,6 +36,11 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 	// Default a reasonable window size; xterm.js sends resize elsewhere if we add it later.
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
 
+	// Start the numbered-menu detector — polls the ring buffer every 250ms
+	// and publishes MenuOptions to the session state so the UI can render
+	// clickable buttons for any TUI selection Claude opens.
+	startMenuDetector(s)
+
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {

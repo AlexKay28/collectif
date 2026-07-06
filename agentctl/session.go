@@ -25,8 +25,36 @@ type ActivityEntry struct {
 }
 
 type ApprovalRequest struct {
-	Message string    `json:"message"`
-	At      time.Time `json:"at"`
+	Message   string         `json:"message"`
+	Tool      string         `json:"tool,omitempty"`
+	ToolInput map[string]any `json:"toolInput,omitempty"`
+	At        time.Time      `json:"at"`
+}
+
+// MenuOption is one item in a numbered TUI menu detected from PTY output.
+type MenuOption struct {
+	Key       string `json:"key"`   // "1", "2", ...
+	Label     string `json:"label"` // display text with ANSI stripped
+	Highlight bool   `json:"highlight,omitempty"`
+}
+
+// AskUserQuestion-tool payload, parsed from tool_input at PreToolUse time.
+// One tool call can carry multiple questions; we track them all.
+type AskOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type AskQuestionItem struct {
+	Question    string      `json:"question"`
+	Header      string      `json:"header,omitempty"`
+	MultiSelect bool        `json:"multiSelect,omitempty"`
+	Options     []AskOption `json:"options"`
+}
+
+type AskQuestionRequest struct {
+	Questions []AskQuestionItem `json:"questions"`
+	At        time.Time         `json:"at"`
 }
 
 type Session struct {
@@ -57,6 +85,21 @@ type Session struct {
 
 	// Pending permission prompt, if any. Cleared on next non-approval event.
 	Pending *ApprovalRequest
+
+	// MenuOptions is populated by the PTY output scanner (transcript.go)
+	// when a numbered selection menu is visible in the terminal.
+	MenuOptions []MenuOption
+
+	// AskQuestion is populated when PreToolUse fires with tool AskUserQuestion,
+	// cleared on the matching PostToolUse. Structured (from tool_input) so we
+	// don't need to scrape it from the TUI.
+	AskQuestion *AskQuestionRequest
+
+	// Most recent PreToolUse — used to enrich a following permission prompt
+	// with the tool name + tool_input so the UI can show what's proposed.
+	LastPreToolName  string
+	LastPreToolInput map[string]any
+	LastPreToolAt    time.Time
 
 	// Transcript watcher bookkeeping.
 	transcriptOffset int64
@@ -176,7 +219,48 @@ func (s *Session) recordTool(name string) {
 
 func (s *Session) setPending(msg string) {
 	s.mu.Lock()
-	s.Pending = &ApprovalRequest{Message: msg, At: time.Now()}
+	req := &ApprovalRequest{Message: msg, At: time.Now()}
+	// If PreToolUse fired within the last 5 seconds, this permission prompt
+	// is almost certainly for that tool call — surface the specifics.
+	if !s.LastPreToolAt.IsZero() && time.Since(s.LastPreToolAt) < 5*time.Second {
+		req.Tool = s.LastPreToolName
+		req.ToolInput = s.LastPreToolInput
+	}
+	s.Pending = req
+	s.mu.Unlock()
+}
+
+func (s *Session) setAskQuestion(q *AskQuestionRequest) {
+	s.mu.Lock()
+	s.AskQuestion = q
+	s.mu.Unlock()
+}
+
+func (s *Session) clearAskQuestion() {
+	s.mu.Lock()
+	s.AskQuestion = nil
+	s.mu.Unlock()
+}
+
+func (s *Session) getMenuOptions() []MenuOption {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]MenuOption, len(s.MenuOptions))
+	copy(out, s.MenuOptions)
+	return out
+}
+
+func (s *Session) setMenuOptions(opts []MenuOption) {
+	s.mu.Lock()
+	s.MenuOptions = opts
+	s.mu.Unlock()
+}
+
+func (s *Session) recordPreTool(name string, input map[string]any) {
+	s.mu.Lock()
+	s.LastPreToolName = name
+	s.LastPreToolInput = input
+	s.LastPreToolAt = time.Now()
 	s.mu.Unlock()
 }
 
@@ -212,10 +296,17 @@ func (s *Session) toJSON() map[string]any {
 	copy(history, s.TaskHistory)
 	var pending any
 	if s.Pending != nil {
-		pending = map[string]any{
+		m := map[string]any{
 			"message": s.Pending.Message,
 			"at":      s.Pending.At.Format(time.RFC3339),
 		}
+		if s.Pending.Tool != "" {
+			m["tool"] = s.Pending.Tool
+		}
+		if len(s.Pending.ToolInput) > 0 {
+			m["toolInput"] = s.Pending.ToolInput
+		}
+		pending = m
 	}
 	return map[string]any{
 		"id":                  s.ID,
@@ -231,6 +322,8 @@ func (s *Session) toJSON() map[string]any {
 		"activity":            activity,
 		"transcriptPath":      s.TranscriptPath,
 		"pending":             pending,
+		"menuOptions":         append([]MenuOption(nil), s.MenuOptions...),
+		"askQuestion":         s.AskQuestion,
 		"inputTokens":         s.InputTokens,
 		"outputTokens":        s.OutputTokens,
 		"cacheReadTokens":     s.CacheReadTokens,

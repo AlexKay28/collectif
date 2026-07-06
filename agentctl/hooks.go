@@ -5,21 +5,24 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 )
 
 // hookPayload matches the JSON Claude Code posts to HTTP hooks.
 // Unknown fields are ignored; different events populate different subsets.
 type hookPayload struct {
-	SessionID      string `json:"session_id"`
-	HookEventName  string `json:"hook_event_name"`
-	ToolName       string `json:"tool_name"`
-	TranscriptPath string `json:"transcript_path"`
-	Message        string `json:"message"`
-	Prompt         string `json:"prompt"`
-	Source         string `json:"source"`
-	Matcher        string `json:"matcher"`
-	Type           string `json:"type"`
-	Cwd            string `json:"cwd"`
+	SessionID      string         `json:"session_id"`
+	HookEventName  string         `json:"hook_event_name"`
+	ToolName       string         `json:"tool_name"`
+	ToolInput      map[string]any `json:"tool_input"`
+	TranscriptPath string         `json:"transcript_path"`
+	Message        string         `json:"message"`
+	Prompt         string         `json:"prompt"`
+	Source         string         `json:"source"`
+	Matcher        string         `json:"matcher"`
+	Type           string         `json:"type"`
+	Cwd            string         `json:"cwd"`
 }
 
 // hookBind/hookPort are populated from main() so the settings generator can
@@ -79,10 +82,21 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 
 	case "PreToolUse":
 		s.recordTool(p.ToolName)
+		s.recordPreTool(p.ToolName, p.ToolInput)
+		// Set structured state BEFORE setStatus so the broadcast that
+		// setStatus emits already carries the fresh askQuestion.
+		if p.ToolName == "AskUserQuestion" {
+			if q := parseAskQuestion(p.ToolInput); q != nil {
+				s.setAskQuestion(q)
+			}
+		}
 		s.appendActivity(ActivityEntry{Event: "PreToolUse", Tool: p.ToolName, Level: "info"})
 		s.setStatus("running", "→ "+p.ToolName)
 
 	case "PostToolUse":
+		if p.ToolName == "AskUserQuestion" {
+			s.clearAskQuestion()
+		}
 		s.appendActivity(ActivityEntry{Event: "PostToolUse", Tool: p.ToolName, Level: "info"})
 		s.setStatus("running", "✓ "+p.ToolName)
 
@@ -91,21 +105,22 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		s.setStatus("error", "✗ "+p.ToolName)
 
 	case "Notification":
-		matcher := p.Matcher
-		if matcher == "" {
-			matcher = p.Type
-		}
-		switch matcher {
-		case "permission_prompt":
-			s.setPending(p.Message)
-			s.appendActivity(ActivityEntry{Event: "PermissionPrompt", Detail: p.Message, Level: "warn"})
-			s.setStatus("waiting_input", "permission prompt")
-		case "idle_prompt":
-			s.appendActivity(ActivityEntry{Event: "IdlePrompt", Detail: p.Message, Level: "info"})
+		// Claude Code fires Notification whenever it wants user attention —
+		// permission prompts, idle timeouts, or arbitrary agent messages.
+		// The type/matcher field varies by version, so classify from the
+		// message text itself.
+		msg := p.Message
+		low := strings.ToLower(msg)
+		isIdle := strings.Contains(low, "idle") ||
+			strings.Contains(low, "still there") ||
+			strings.Contains(low, "waiting for you to")
+		if isIdle {
+			s.appendActivity(ActivityEntry{Event: "IdlePrompt", Detail: msg, Level: "info"})
 			s.setStatus("idle", "idle prompt")
-		default:
-			s.appendActivity(ActivityEntry{Event: "Notification", Detail: p.Message, Level: "warn"})
-			s.setStatus("waiting_input", truncate(p.Message, 80))
+		} else {
+			s.setPending(msg)
+			s.appendActivity(ActivityEntry{Event: "PermissionPrompt", Detail: msg, Level: "warn"})
+			s.setStatus("waiting_input", truncate(msg, 80))
 		}
 
 	case "Stop":
@@ -122,6 +137,63 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// parseAskQuestion pulls the questions[]/options structure out of the
+// AskUserQuestion tool_input. Defensive: the schema might drift, so every
+// step is type-checked instead of blindly cast.
+func parseAskQuestion(input map[string]any) *AskQuestionRequest {
+	if input == nil {
+		return nil
+	}
+	qs, ok := input["questions"].([]any)
+	if !ok || len(qs) == 0 {
+		return nil
+	}
+	req := &AskQuestionRequest{At: time.Now()}
+	for _, qi := range qs {
+		q, ok := qi.(map[string]any)
+		if !ok {
+			continue
+		}
+		item := AskQuestionItem{
+			Question:    getStr(q, "question"),
+			Header:      getStr(q, "header"),
+			MultiSelect: getBool(q, "multiSelect"),
+		}
+		if opts, ok := q["options"].([]any); ok {
+			for _, oi := range opts {
+				om, ok := oi.(map[string]any)
+				if !ok {
+					continue
+				}
+				item.Options = append(item.Options, AskOption{
+					Label:       getStr(om, "label"),
+					Description: getStr(om, "description"),
+				})
+			}
+		}
+		if item.Question != "" && len(item.Options) > 0 {
+			req.Questions = append(req.Questions, item)
+		}
+	}
+	if len(req.Questions) == 0 {
+		return nil
+	}
+	return req
+}
+
+func getStr(m map[string]any, k string) string {
+	if v, ok := m[k].(string); ok {
+		return v
+	}
+	return ""
+}
+func getBool(m map[string]any, k string) bool {
+	if v, ok := m[k].(bool); ok {
+		return v
+	}
+	return false
 }
 
 func truncate(s string, n int) string {
