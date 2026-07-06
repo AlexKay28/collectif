@@ -985,4 +985,219 @@ setInterval(() => {
 // sparklines have at least one point on load.
 sampleTrend();
 scheduleRender("all");
+
+// ─── Team designer: subagent CRUD + DAG canvas ──
+// Full-screen overlay showing a DAG of subagent configs from the selected
+// agent's <cwd>/.claude/agents/*.md. Nodes are the files; edges come from
+// each file's optional `subagents:` frontmatter field (our extension —
+// Claude Code ignores it).
+const TEAM_NODE_W = 240;
+const TEAM_NODE_H = 84;
+const TEAM_X_GAP = 24;
+const TEAM_Y_GAP = 40;
+const TEAM_PADDING = 24;
+let teamSubagents = [];   // last-loaded array of SubagentFile
+let teamEditingName = ""; // "" when creating, else the name being edited
+
+async function openTeam() {
+  const a = selectedId ? agents.get(selectedId) : null;
+  if (!a) { toast.error("Select an agent first"); return; }
+  document.getElementById("team-title").textContent = "Team — " + agentName(a);
+  document.getElementById("team-cwd").textContent = a.cwd + "/.claude/agents/";
+  document.getElementById("team-overlay").classList.add("show");
+  await refreshTeam();
+}
+function closeTeam() {
+  document.getElementById("team-overlay").classList.remove("show");
+  teamSubagents = [];
+}
+async function refreshTeam() {
+  if (!selectedId) return;
+  try {
+    const res = await fetch("/api/agents/" + selectedId + "/subagents");
+    if (!res.ok) { toast.error("Load failed: " + (await res.text())); return; }
+    teamSubagents = await res.json();
+  } catch (err) { toast.error("Load failed: " + err.message); return; }
+  renderTeamCanvas();
+}
+function renderTeamCanvas() {
+  const canvas = document.getElementById("team-canvas");
+  const empty = document.getElementById("team-empty");
+  if (teamSubagents.length === 0) {
+    canvas.style.display = "none";
+    empty.style.display = "flex";
+    return;
+  }
+  canvas.style.display = "block";
+  empty.style.display = "none";
+
+  const byName = new Map(teamSubagents.map(sf => [sf.name, sf]));
+  const childrenOf = new Map();
+  const hasParent = new Set();
+  for (const sf of teamSubagents) {
+    for (const child of (sf.subagents || [])) {
+      if (!byName.has(child)) continue;
+      if (!childrenOf.has(sf.name)) childrenOf.set(sf.name, []);
+      childrenOf.get(sf.name).push(child);
+      hasParent.add(child);
+    }
+  }
+  const roots = teamSubagents.filter(sf => !hasParent.has(sf.name)).map(sf => sf.name);
+  if (roots.length === 0) {
+    // Every node has a parent — must be a cycle; pick the first alphabetically
+    // as a synthetic root so the layout still runs.
+    roots.push(teamSubagents[0].name);
+  }
+
+  const positions = new Map();
+  const visited = new Set();
+  function layout(name, x, y) {
+    if (visited.has(name)) return TEAM_NODE_W;
+    visited.add(name);
+    const kids = (childrenOf.get(name) || []).filter(k => !visited.has(k));
+    if (kids.length === 0) {
+      positions.set(name, { x, y });
+      return TEAM_NODE_W;
+    }
+    const childY = y + TEAM_NODE_H + TEAM_Y_GAP;
+    let cursorX = x;
+    const widths = [];
+    for (const k of kids) {
+      const w = layout(k, cursorX, childY);
+      widths.push(w);
+      cursorX += w + TEAM_X_GAP;
+    }
+    const total = widths.reduce((s, w) => s + w, 0) + TEAM_X_GAP * (kids.length - 1);
+    positions.set(name, { x: x + total / 2 - TEAM_NODE_W / 2, y });
+    return Math.max(TEAM_NODE_W, total);
+  }
+  let cursorX = TEAM_PADDING;
+  let maxDepth = 0;
+  const depth = (name, d) => {
+    maxDepth = Math.max(maxDepth, d);
+    for (const k of (childrenOf.get(name) || [])) depth(k, d + 1);
+  };
+  for (const r of roots) {
+    const w = layout(r, cursorX, TEAM_PADDING);
+    cursorX += w + TEAM_X_GAP * 2;
+    depth(r, 0);
+  }
+  const totalW = Math.max(TEAM_NODE_W + 2 * TEAM_PADDING, cursorX - TEAM_X_GAP * 2 + TEAM_PADDING);
+  const totalH = TEAM_PADDING * 2 + (maxDepth + 1) * TEAM_NODE_H + maxDepth * TEAM_Y_GAP;
+
+  const edges = [];
+  for (const [parent, kids] of childrenOf) {
+    const p = positions.get(parent);
+    if (!p) continue;
+    for (const kid of kids) {
+      const c = positions.get(kid);
+      if (!c) continue;
+      const x1 = p.x + TEAM_NODE_W / 2, y1 = p.y + TEAM_NODE_H;
+      const x2 = c.x + TEAM_NODE_W / 2, y2 = c.y;
+      const mid = (y1 + y2) / 2;
+      edges.push('<path class="edge" d="M ' + x1 + ',' + y1 + ' C ' + x1 + ',' + mid + ' ' + x2 + ',' + mid + ' ' + x2 + ',' + y2 + '" marker-end="url(#team-arrow)"/>');
+    }
+  }
+  const nodes = teamSubagents.map(sf => {
+    const p = positions.get(sf.name);
+    if (!p) return "";
+    const toolsBadge = (sf.tools || []).length > 0 ? '<span class="badge">' + esc((sf.tools || []).length + " tool" + ((sf.tools || []).length === 1 ? "" : "s")) + '</span>' : "";
+    const modelBadge = sf.model ? '<span class="badge model">' + esc(sf.model) + '</span>' : "";
+    return (
+      '<div class="team-node" data-name="' + esc(sf.name) + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_NODE_H + 'px">' +
+        '<div class="name">' + esc(sf.name) + '</div>' +
+        '<div class="desc">' + esc(sf.description || "") + '</div>' +
+        '<div class="badges">' + modelBadge + toolsBadge + '</div>' +
+      '</div>'
+    );
+  }).join("");
+
+  canvas.innerHTML = (
+    '<div class="canvas-inner" style="width:' + totalW + 'px;height:' + totalH + 'px">' +
+      '<svg width="' + totalW + '" height="' + totalH + '">' +
+        '<defs><marker id="team-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path class="arrow" d="M0,0 L0,6 L9,3 z"/></marker></defs>' +
+        edges.join('') +
+      '</svg>' +
+      nodes +
+    '</div>'
+  );
+  canvas.querySelectorAll(".team-node").forEach(n => {
+    n.onclick = () => openSubagentModal(n.dataset.name);
+  });
+}
+
+function openSubagentModal(name) {
+  teamEditingName = name || "";
+  const sf = name ? teamSubagents.find(x => x.name === name) : null;
+  document.getElementById("sa-title").textContent = name ? "Edit " + name : "New subagent";
+  document.getElementById("sa-name").value = sf ? sf.name : "";
+  document.getElementById("sa-name").disabled = !!name;
+  document.getElementById("sa-desc").value = sf ? (sf.description || "") : "";
+  document.getElementById("sa-model").value = sf ? (sf.model || "") : "";
+  document.getElementById("sa-tools").value = sf ? (sf.tools || []).join(", ") : "";
+  document.getElementById("sa-prompt").value = sf ? (sf.prompt || "") : "";
+  // Delegation checkboxes: every other subagent except self.
+  const delegates = document.getElementById("sa-delegates");
+  const others = teamSubagents.filter(x => x.name !== (sf ? sf.name : ""));
+  if (others.length === 0) {
+    delegates.innerHTML = '<div class="empty">Add more subagents to draw delegation edges.</div>';
+  } else {
+    const chosen = new Set(sf ? (sf.subagents || []) : []);
+    delegates.innerHTML = others.map(o => (
+      '<label><input type="checkbox" value="' + esc(o.name) + '"' + (chosen.has(o.name) ? " checked" : "") + '>' + esc(o.name) + '</label>'
+    )).join('');
+  }
+  document.getElementById("sa-delete").style.display = name ? "" : "none";
+  document.getElementById("sa-modal").classList.add("show");
+  if (!name) document.getElementById("sa-name").focus();
+}
+function closeSubagentModal() {
+  document.getElementById("sa-modal").classList.remove("show");
+  teamEditingName = "";
+}
+async function saveSubagent() {
+  const name = document.getElementById("sa-name").value.trim();
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+    toast.error("Name must match a–z 0–9 - (max 64 chars)");
+    return;
+  }
+  const body = {
+    name,
+    description: document.getElementById("sa-desc").value.trim(),
+    model: document.getElementById("sa-model").value.trim(),
+    tools: document.getElementById("sa-tools").value.split(",").map(s => s.trim()).filter(Boolean),
+    subagents: Array.from(document.querySelectorAll("#sa-delegates input:checked")).map(cb => cb.value),
+    prompt: document.getElementById("sa-prompt").value,
+  };
+  try {
+    const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(name), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { toast.error("Save failed: " + (await res.text())); return; }
+    toast.success("Saved " + name);
+  } catch (err) { toast.error("Save failed: " + err.message); return; }
+  closeSubagentModal();
+  refreshTeam();
+}
+async function deleteSubagent() {
+  if (!teamEditingName) return;
+  if (!confirm("Delete subagent " + teamEditingName + "?")) return;
+  const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(teamEditingName), { method: "DELETE" });
+  if (!res.ok) { toast.error("Delete failed: " + (await res.text())); return; }
+  toast.success("Deleted " + teamEditingName);
+  closeSubagentModal();
+  refreshTeam();
+}
+
+document.getElementById("d-team").onclick = openTeam;
+document.getElementById("team-close").onclick = closeTeam;
+document.getElementById("team-refresh").onclick = refreshTeam;
+document.getElementById("team-new").onclick = () => openSubagentModal(null);
+document.getElementById("team-empty-new").onclick = () => openSubagentModal(null);
+document.getElementById("sa-cancel").onclick = closeSubagentModal;
+document.getElementById("sa-save").onclick = saveSubagent;
+document.getElementById("sa-delete").onclick = deleteSubagent;
+
 } // AGENTCTL_NO_TOKEN guard
