@@ -145,6 +145,14 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		s.appendActivity(ActivityEntry{Event: "SessionEnd", Level: "info"})
 		s.setStatus("stopped", "session ended")
 
+	case "SubagentStop":
+		s.appendActivity(ActivityEntry{Event: "SubagentStop", Level: "info"})
+		s.touch()
+
+	case "PreCompact":
+		s.appendActivity(ActivityEntry{Event: "PreCompact", Detail: p.Matcher, Level: "info"})
+		s.touch()
+
 	default:
 		s.appendActivity(ActivityEntry{Event: p.HookEventName, Level: "info"})
 		s.touch()
