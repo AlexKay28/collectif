@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -13,7 +14,7 @@ import (
 // sums assistant-message token usage into the session totals. The schema is
 // defensively parsed: we look for a `usage` object at the top level, under
 // `message`, or under `response`, and accept whatever integer fields it holds.
-func startTranscriptWatcher(s *Session) {
+func startTranscriptWatcher(ctx context.Context, s *Session) {
 	s.mu.Lock()
 	if s.watching || s.TranscriptPath == "" {
 		s.mu.Unlock()
@@ -27,20 +28,15 @@ func startTranscriptWatcher(s *Session) {
 		var partial []byte
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
-		missCount := 0
 
-		for range ticker.C {
-			// Bail if the session was removed.
-			if getSession(s.ID) == nil {
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case <-ticker.C:
 			}
 			f, err := os.Open(path)
 			if err != nil {
-				missCount++
-				if missCount > 40 { // ~20s
-					// Give up if the file never appears.
-					return
-				}
 				continue
 			}
 

@@ -39,7 +39,7 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 	// Start the numbered-menu detector — polls the ring buffer every 250ms
 	// and publishes MenuOptions to the session state so the UI can render
 	// clickable buttons for any TUI selection Claude opens.
-	startMenuDetector(s)
+	startMenuDetector(s.ctx, s)
 
 	go func() {
 		buf := make([]byte, 32*1024)

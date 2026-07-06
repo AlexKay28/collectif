@@ -104,10 +104,12 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		case "approve":
 			// Send the literal word — works for y/n prompts and for
 			// Claude's ink-select menus (typing filters to items matching
-			// "yes", then Enter confirms the highlighted "Yes").
-			handleAgentTimedKeys(w, r, s, []string{"yes\r"}, 0)
+			// "yes", then Enter confirms the highlighted "Yes"). If the
+			// prompt is a digit-only ink-select (no filter), the fallback
+			// "1\r" kicks in after 1.5s if pending is still set.
+			handleAgentAnswer(w, r, s, []string{"yes\r"}, []string{"1\r"})
 		case "deny":
-			handleAgentTimedKeys(w, r, s, []string{"no\r"}, 0)
+			handleAgentAnswer(w, r, s, []string{"no\r"}, []string{"\x1b"})
 		case "resize":
 			handleAgentResize(w, r, s)
 		default:
@@ -175,11 +177,10 @@ func handleAgentInput(w http.ResponseWriter, r *http.Request, s *Session) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleAgentTimedKeys writes a sequence of key chunks to the PTY with an
-// optional delay between them (mimics human typing so TUIs settle between
-// select + confirm). Every write is logged with its hex bytes so we can
-// diagnose approve/deny failures.
-func handleAgentTimedKeys(w http.ResponseWriter, r *http.Request, s *Session, chunks []string, gap time.Duration) {
+// handleAgentAnswer writes primary approve/deny keystrokes, then 1.5s later
+// checks whether Pending was cleared; if not, writes the fallback keystrokes
+// (e.g. "1\r" for approve on digit-only ink-selects, "\x1b" for deny).
+func handleAgentAnswer(w http.ResponseWriter, r *http.Request, s *Session, primary, fallback []string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -188,21 +189,24 @@ func handleAgentTimedKeys(w http.ResponseWriter, r *http.Request, s *Session, ch
 		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
 		return
 	}
-	go func() {
+	writeChunks := func(label string, chunks []string) {
 		for i, k := range chunks {
-			if i > 0 && gap > 0 {
-				time.Sleep(gap)
-			}
 			n, err := s.PTY.Write([]byte(k))
-			log.Printf("[%s] pty answer chunk %d/%d: n=%d bytes=%s err=%v",
-				s.ID, i+1, len(chunks), n, hex.EncodeToString([]byte(k)), err)
+			log.Printf("[%s] pty %s chunk %d/%d: n=%d bytes=%s err=%v",
+				s.ID, label, i+1, len(chunks), n, hex.EncodeToString([]byte(k)), err)
 			if err != nil {
 				return
 			}
 		}
+	}
+	go func() {
+		writeChunks("primary", primary)
+		time.Sleep(1500 * time.Millisecond)
+		if s.hasPending() {
+			log.Printf("[%s] pty answer: pending still set after primary, sending fallback", s.ID)
+			writeChunks("fallback", fallback)
+		}
 	}()
-	s.clearPending()
-	s.touch()
 	w.WriteHeader(http.StatusNoContent)
 }
 
