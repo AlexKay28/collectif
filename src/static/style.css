@@ -437,36 +437,46 @@ header h1:hover { color: var(--accent); }
 .toast.info    { border-left-color: var(--accent); }
 .toast.success { border-left-color: var(--running); }
 
-/* ─── Team designer overlay ─────────────────────
-   Full-screen overlay showing the DAG of subagent configs from
-   <cwd>/.claude/agents/*.md. Nodes are HTML tiles absolutely positioned;
-   edges are an SVG layer drawn in the same coordinate space. */
-#team-overlay { position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column; z-index: 45; }
-#team-overlay.show { display: flex; }
-.team-head { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; background: var(--panel); }
-.team-head h3 { margin: 0; font-size: 15px; }
-.team-head .team-cwd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
-.team-head .spacer { flex: 1; }
-.team-canvas { flex: 1; position: relative; overflow: auto; background: repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,0.02) 39px 40px), repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,0.02) 39px 40px); }
+/* ─── Team designer (inline right-column panel) ─
+   Persistent right-column view showing the DAG of subagents from
+   <cwd>/.claude/agents/*.md. Root node = the selected session itself.
+   Nodes are absolutely-positioned HTML tiles; edges are an SVG layer. */
+.dash-team { display: none; flex-direction: column; min-width: 0; height: 100%; background: var(--panel); border-left: 1px solid var(--border); }
+.dash-team.show { display: flex; }
+.team-inline-head { padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; background: var(--panel-2); flex: 0 0 auto; }
+.team-inline-head .team-cwd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+.team-inline-head .spacer { flex: 1; }
+.team-inline-head button { padding: 4px 10px; font-size: 11.5px; }
+.team-canvas { flex: 1 1 auto; position: relative; overflow: auto; min-height: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,0.02) 39px 40px),
+              repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,0.02) 39px 40px); }
 .team-canvas .canvas-inner { position: relative; }
 .team-canvas svg { position: absolute; top: 0; left: 0; pointer-events: none; }
-.team-canvas svg .edge { fill: none; stroke: var(--border-hi); stroke-width: 1.6; }
+.team-canvas svg .edge { fill: none; stroke: var(--border-hi); stroke-width: 1.4; }
 .team-canvas svg .arrow { fill: var(--border-hi); }
 .team-node {
   position: absolute; box-sizing: border-box;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 12px; cursor: pointer;
-  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px;
   transition: border-color 0.1s, transform 0.05s;
 }
 .team-node:hover { border-color: var(--accent); }
 .team-node:active { transform: scale(0.99); }
-.team-node .name { font-weight: 700; font-size: 13px; color: var(--text); }
-.team-node .desc { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.team-node .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
-.team-node .badges .badge { font-size: 9.5px; padding: 1px 6px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); font-family: ui-monospace, monospace; }
+.team-node .name { font-weight: 700; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-node .desc { color: var(--muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.team-node .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 1px; }
+.team-node .badges .badge { font-size: 9px; padding: 0 5px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); font-family: ui-monospace, monospace; }
 .team-node .badges .badge.model { color: var(--accent); border-color: var(--accent); }
-.team-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); gap: 8px; font-size: 13px; }
+/* Root node = the currently-selected agent. Larger, avatar-first, blue-accented. */
+.team-node.root { background: var(--panel-2); border: 2px solid var(--accent); box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.15); cursor: default; }
+.team-node.root:hover { border-color: var(--accent); }
+.team-node.root .head { display: grid; grid-template-columns: 22px 1fr; gap: 6px; align-items: center; }
+.team-node.root .head .avatar { width: 22px; height: 22px; border-width: 1px; }
+.team-node.root .head .avatar img { width: 100%; height: 100%; display: block; }
+.team-node.root .name { color: var(--accent); }
+.team-node.root .lab { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; }
+.team-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); gap: 8px; font-size: 12px; padding: 20px; text-align: center; }
 
 /* ─── Subagent edit modal ──────────────────────── */
 #sa-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 50; }

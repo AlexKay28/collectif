@@ -50,8 +50,7 @@
                   <div class="task" id="d-task"></div>
                 </div>
                 <div class="actions">
-                  <button id="d-copy" title="Copy current terminal selection">Copy</button>
-                  <button id="d-team" title="Manage subagents (/agents)">Team</button>
+                  <button id="d-copy" title="Copy current terminal output">Copy</button>
                   <button id="d-kill" class="ghost">Kill</button>
                 </div>
               </div>
@@ -61,8 +60,23 @@
             </div>
           </div>
 
-          <!-- RIGHT: charts + tokens + bars + feed + tools (scrolls independently) -->
-          <div class="dash-right">
+          <!-- RIGHT: team designer (when agent selected) OR overview metrics (when not) -->
+          <div class="dash-team" id="dash-team-panel" style="display:none">
+            <div class="team-inline-head">
+              <h3 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Team</h3>
+              <span class="team-cwd" id="team-cwd"></span>
+              <span class="spacer"></span>
+              <button id="team-refresh" title="Re-read .claude/agents from disk">↻</button>
+              <button class="primary" id="team-new">+ Subagent</button>
+            </div>
+            <div class="team-canvas" id="team-canvas"></div>
+            <div class="team-empty" id="team-empty" style="display:none">
+              <div style="font-size:26px">🧑‍🤝‍🧑</div>
+              <div>No subagents configured yet.</div>
+              <div style="margin-top:10px"><button class="primary" id="team-empty-new">+ Create first subagent</button></div>
+            </div>
+          </div>
+          <div class="dash-right" id="dash-right-metrics">
             <h3>Trends <span class="count" id="dash-trend-window">last 10m</span></h3>
             <div class="chart-stack">
               <div class="chart-card active">
@@ -108,23 +122,6 @@
       <button id="cancel-btn">Cancel</button>
       <button class="primary" id="create-btn">Spawn</button>
     </div>
-  </div>
-</div>
-
-<div id="team-overlay">
-  <div class="team-head">
-    <h3 id="team-title">Team</h3>
-    <span class="team-cwd" id="team-cwd"></span>
-    <span class="spacer"></span>
-    <button class="primary" id="team-new">+ New subagent</button>
-    <button id="team-refresh">Refresh</button>
-    <button id="team-close">Close</button>
-  </div>
-  <div class="team-canvas" id="team-canvas"></div>
-  <div class="team-empty" id="team-empty" style="display:none">
-    <div style="font-size:32px">🧑‍🤝‍🧑</div>
-    <div>No subagents configured for this project yet.</div>
-    <div style="margin-top:12px"><button class="primary" id="team-empty-new">+ Create first subagent</button></div>
   </div>
 </div>
 

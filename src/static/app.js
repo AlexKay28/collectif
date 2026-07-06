@@ -707,6 +707,7 @@ function renderTermPanel(mountTerminal) {
     head.style.display = "none";
     body.style.display = "none";
     teardownTerminal();
+    updateTeamVisibility();
     return;
   }
   empty.style.display = "none";
@@ -722,9 +723,8 @@ function renderTermPanel(mountTerminal) {
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
 
   if (mountTerminal) mountTerminalFor(a.id);
-  // If we didn't remount, the terminal is still bound to the previous agent.
-  // Fit again in case the panel resized.
   requestAnimationFrame(() => { fitTerminalNow(); });
+  updateTeamVisibility();
 }
 
 // Cross-context clipboard helpers. Prefer navigator.clipboard when we're
@@ -843,37 +843,55 @@ function mountTerminalFor(id) {
     theme: { background: "#000000" },
     rightClickSelectsWord: true,
   });
-  // Copy on Ctrl+Shift+C / Cmd+C when a selection exists. Falls through
-  // otherwise so plain Ctrl+C keeps sending SIGINT. On non-HTTPS the
-  // Clipboard API silently rejects; execCommand("copy") is a working
-  // fallback that predates the modern API.
+  // Selection → clipboard behavior mirrors what Alacritty / iTerm /
+  // gnome-terminal do:
+  //  1. Finish a drag-select → auto-copy to clipboard immediately.
+  //  2. Ctrl+C (or Cmd+C on Mac) with a selection → also copy AND swallow
+  //     the key so it doesn't SIGINT. No selection → key passes through
+  //     to the PTY as normal (SIGINT for a running process).
+  //  3. Ctrl+Shift+C also copies (traditional terminal convention).
+  //  4. Ctrl+Shift+V / Cmd+V pastes clipboard into the PTY.
+  let lastSelection = "";
+  if (term.onSelectionChange) {
+    term.onSelectionChange(() => {
+      const sel = term.getSelection ? term.getSelection() : "";
+      console.log("[xterm-selection]", sel ? sel.length + " chars: " + JSON.stringify(sel.slice(0, 60)) : "(empty)");
+      if (sel && sel !== lastSelection) {
+        lastSelection = sel;
+        copyToClipboard(sel).then(ok => {
+          if (ok) toast.success("Copied " + sel.length + " chars");
+        });
+      } else if (!sel) {
+        lastSelection = "";
+      }
+    });
+  }
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
     const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-    const copy  = (ev.ctrlKey && ev.shiftKey && (ev.key === "C" || ev.key === "c"))
-               || (isMac && ev.metaKey && !ev.ctrlKey && (ev.key === "c" || ev.key === "C"));
-    const paste = (ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"))
-               || (isMac && ev.metaKey && !ev.ctrlKey && (ev.key === "v" || ev.key === "V"));
-    if (copy) {
-      // Two selection sources: xterm's internal buffer (when you drag over
-      // the canvas and xterm captures it) or the browser's own selection
-      // (some browsers highlight rendered text natively). Try both.
-      let sel = term.getSelection();
-      if (!sel) {
-        const winSel = window.getSelection && window.getSelection();
-        if (winSel && String(winSel).length > 0) sel = String(winSel);
+    const isC = ev.key === "c" || ev.key === "C";
+    const isV = ev.key === "v" || ev.key === "V";
+    const shift = ev.shiftKey;
+    const ctrlOrCmd = ev.ctrlKey || (isMac && ev.metaKey);
+    // Copy: Ctrl+C / Cmd+C / Ctrl+Shift+C — if a selection exists.
+    if (ctrlOrCmd && isC && !ev.altKey) {
+      const sel = (term.getSelection && term.getSelection()) || lastSelection ||
+                  (window.getSelection && String(window.getSelection())) || "";
+      if (sel) {
+        copyToClipboard(sel).then(ok => {
+          if (ok) toast.success("Copied " + sel.length + " chars");
+          else    toast.error("Clipboard write blocked by browser");
+        });
+        return false; // swallow the key so plain Ctrl+C doesn't SIGINT
       }
-      if (!sel) { toast.info("Select text first, then " + (isMac ? "⌘C" : "Ctrl+Shift+C")); return false; }
-      copyToClipboard(sel).then(ok => {
-        if (ok) toast.success("Copied " + sel.length + " chars");
-        else    toast.error("Copy failed — browser blocked clipboard access");
-      });
-      return false;
+      // No selection → let it through as SIGINT (default xterm behavior).
+      return true;
     }
-    if (paste) {
+    // Paste: Ctrl+Shift+V / Cmd+V.
+    if (ctrlOrCmd && isV && (shift || isMac) && !ev.altKey) {
       pasteFromClipboard().then(text => {
         if (text && termWS && termWS.readyState === 1) termWS.send(text);
-        else if (!text) toast.info("Nothing to paste (clipboard empty or access denied)");
+        else if (!text) toast.info("Clipboard empty or access denied");
       });
       return false;
     }
@@ -1066,30 +1084,47 @@ setInterval(() => {
 sampleTrend();
 scheduleRender("all");
 
-// ─── Team designer: subagent CRUD + DAG canvas ──
-// Full-screen overlay showing a DAG of subagent configs from the selected
-// agent's <cwd>/.claude/agents/*.md. Nodes are the files; edges come from
-// each file's optional `subagents:` frontmatter field (our extension —
-// Claude Code ignores it).
-const TEAM_NODE_W = 240;
-const TEAM_NODE_H = 84;
-const TEAM_X_GAP = 24;
-const TEAM_Y_GAP = 40;
-const TEAM_PADDING = 24;
+// ─── Team designer: subagent CRUD + inline DAG panel ──
+// Right-column panel (replaces overview metrics when an agent is selected)
+// showing a DAG of subagent configs from <cwd>/.claude/agents/*.md.
+// A special root node represents the selected session itself; every
+// otherwise-orphan subagent implicitly hangs under it. Edges between
+// subagents come from each file's `subagents:` frontmatter field.
+const TEAM_NODE_W = 200;
+const TEAM_NODE_H = 72;
+const TEAM_ROOT_H = 56;
+const TEAM_X_GAP = 18;
+const TEAM_Y_GAP = 36;
+const TEAM_PADDING = 16;
+const ROOT_ID = "__self__";
 let teamSubagents = [];   // last-loaded array of SubagentFile
 let teamEditingName = ""; // "" when creating, else the name being edited
+let teamCurrentSelection = null; // last agent id we loaded team for
 
-async function openTeam() {
+async function refreshTeamForCurrent() {
   const a = selectedId ? agents.get(selectedId) : null;
-  if (!a) { toast.error("Select an agent first"); return; }
-  document.getElementById("team-title").textContent = "Team — " + agentName(a);
+  if (!a) return;
   document.getElementById("team-cwd").textContent = a.cwd + "/.claude/agents/";
-  document.getElementById("team-overlay").classList.add("show");
   await refreshTeam();
 }
-function closeTeam() {
-  document.getElementById("team-overlay").classList.remove("show");
-  teamSubagents = [];
+function updateTeamVisibility() {
+  const a = selectedId ? agents.get(selectedId) : null;
+  const team = document.getElementById("dash-team-panel");
+  const metrics = document.getElementById("dash-right-metrics");
+  if (!team || !metrics) return;
+  if (a) {
+    team.style.display = "flex";
+    metrics.style.display = "none";
+    if (teamCurrentSelection !== a.id) {
+      teamCurrentSelection = a.id;
+      refreshTeamForCurrent();
+    }
+  } else {
+    team.style.display = "none";
+    metrics.style.display = "";
+    teamCurrentSelection = null;
+    teamSubagents = [];
+  }
 }
 async function refreshTeam() {
   if (!selectedId) return;
@@ -1103,7 +1138,12 @@ async function refreshTeam() {
 function renderTeamCanvas() {
   const canvas = document.getElementById("team-canvas");
   const empty = document.getElementById("team-empty");
+  const a = selectedId ? agents.get(selectedId) : null;
+  if (!a) return;
+
   if (teamSubagents.length === 0) {
+    // Still show the root node representing the selected agent, plus the
+    // empty-state prompt encouraging first subagent creation.
     canvas.style.display = "none";
     empty.style.display = "flex";
     return;
@@ -1111,6 +1151,8 @@ function renderTeamCanvas() {
   canvas.style.display = "block";
   empty.style.display = "none";
 
+  // Build the subagent graph, then insert a synthetic ROOT node (= the
+  // selected agent) as parent of every subagent that no one else references.
   const byName = new Map(teamSubagents.map(sf => [sf.name, sf]));
   const childrenOf = new Map();
   const hasParent = new Set();
@@ -1122,16 +1164,13 @@ function renderTeamCanvas() {
       hasParent.add(child);
     }
   }
-  const roots = teamSubagents.filter(sf => !hasParent.has(sf.name)).map(sf => sf.name);
-  if (roots.length === 0) {
-    // Every node has a parent — must be a cycle; pick the first alphabetically
-    // as a synthetic root so the layout still runs.
-    roots.push(teamSubagents[0].name);
-  }
+  const orphans = teamSubagents.filter(sf => !hasParent.has(sf.name)).map(sf => sf.name);
+  const rootKids = orphans.length > 0 ? orphans : teamSubagents.map(sf => sf.name).slice(0, 1);
+  childrenOf.set(ROOT_ID, rootKids);
 
   const positions = new Map();
   const visited = new Set();
-  function layout(name, x, y) {
+  function layout(name, x, y, nodeH) {
     if (visited.has(name)) return TEAM_NODE_W;
     visited.add(name);
     const kids = (childrenOf.get(name) || []).filter(k => !visited.has(k));
@@ -1139,11 +1178,11 @@ function renderTeamCanvas() {
       positions.set(name, { x, y });
       return TEAM_NODE_W;
     }
-    const childY = y + TEAM_NODE_H + TEAM_Y_GAP;
+    const childY = y + nodeH + TEAM_Y_GAP;
     let cursorX = x;
     const widths = [];
     for (const k of kids) {
-      const w = layout(k, cursorX, childY);
+      const w = layout(k, cursorX, childY, TEAM_NODE_H);
       widths.push(w);
       cursorX += w + TEAM_X_GAP;
     }
@@ -1151,34 +1190,41 @@ function renderTeamCanvas() {
     positions.set(name, { x: x + total / 2 - TEAM_NODE_W / 2, y });
     return Math.max(TEAM_NODE_W, total);
   }
-  let cursorX = TEAM_PADDING;
+  const totalW = Math.max(TEAM_NODE_W + 2 * TEAM_PADDING,
+                          layout(ROOT_ID, TEAM_PADDING, TEAM_PADDING, TEAM_ROOT_H) + 2 * TEAM_PADDING);
   let maxDepth = 0;
   const depth = (name, d) => {
     maxDepth = Math.max(maxDepth, d);
     for (const k of (childrenOf.get(name) || [])) depth(k, d + 1);
   };
-  for (const r of roots) {
-    const w = layout(r, cursorX, TEAM_PADDING);
-    cursorX += w + TEAM_X_GAP * 2;
-    depth(r, 0);
-  }
-  const totalW = Math.max(TEAM_NODE_W + 2 * TEAM_PADDING, cursorX - TEAM_X_GAP * 2 + TEAM_PADDING);
-  const totalH = TEAM_PADDING * 2 + (maxDepth + 1) * TEAM_NODE_H + maxDepth * TEAM_Y_GAP;
+  depth(ROOT_ID, 0);
+  const totalH = TEAM_PADDING * 2 + TEAM_ROOT_H + TEAM_Y_GAP + maxDepth * (TEAM_NODE_H + TEAM_Y_GAP);
 
   const edges = [];
   for (const [parent, kids] of childrenOf) {
     const p = positions.get(parent);
     if (!p) continue;
+    const pH = parent === ROOT_ID ? TEAM_ROOT_H : TEAM_NODE_H;
     for (const kid of kids) {
       const c = positions.get(kid);
       if (!c) continue;
-      const x1 = p.x + TEAM_NODE_W / 2, y1 = p.y + TEAM_NODE_H;
+      const x1 = p.x + TEAM_NODE_W / 2, y1 = p.y + pH;
       const x2 = c.x + TEAM_NODE_W / 2, y2 = c.y;
       const mid = (y1 + y2) / 2;
       edges.push('<path class="edge" d="M ' + x1 + ',' + y1 + ' C ' + x1 + ',' + mid + ' ' + x2 + ',' + mid + ' ' + x2 + ',' + y2 + '" marker-end="url(#team-arrow)"/>');
     }
   }
-  const nodes = teamSubagents.map(sf => {
+  const rootPos = positions.get(ROOT_ID);
+  const rootNodeHTML = rootPos ? (
+    '<div class="team-node root" style="left:' + rootPos.x + 'px;top:' + rootPos.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_ROOT_H + 'px">' +
+      '<div class="lab">Current session</div>' +
+      '<div class="head">' +
+        '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="name">' + esc(agentName(a)) + '</div>' +
+      '</div>' +
+    '</div>'
+  ) : "";
+  const subNodesHTML = teamSubagents.map(sf => {
     const p = positions.get(sf.name);
     if (!p) return "";
     const toolsBadge = (sf.tools || []).length > 0 ? '<span class="badge">' + esc((sf.tools || []).length + " tool" + ((sf.tools || []).length === 1 ? "" : "s")) + '</span>' : "";
@@ -1198,10 +1244,11 @@ function renderTeamCanvas() {
         '<defs><marker id="team-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path class="arrow" d="M0,0 L0,6 L9,3 z"/></marker></defs>' +
         edges.join('') +
       '</svg>' +
-      nodes +
+      rootNodeHTML +
+      subNodesHTML +
     '</div>'
   );
-  canvas.querySelectorAll(".team-node").forEach(n => {
+  canvas.querySelectorAll(".team-node[data-name]").forEach(n => {
     n.onclick = () => openSubagentModal(n.dataset.name);
   });
 }
@@ -1305,9 +1352,7 @@ document.getElementById("output-copy-all").onclick = async () => {
   else    toast.error("Clipboard write failed — select text in the box and Ctrl+C manually");
 };
 
-document.getElementById("d-team").onclick = openTeam;
-document.getElementById("team-close").onclick = closeTeam;
-document.getElementById("team-refresh").onclick = refreshTeam;
+document.getElementById("team-refresh").onclick = refreshTeamForCurrent;
 document.getElementById("team-new").onclick = () => openSubagentModal(null);
 document.getElementById("team-empty-new").onclick = () => openSubagentModal(null);
 document.getElementById("sa-cancel").onclick = closeSubagentModal;
