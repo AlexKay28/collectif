@@ -11,8 +11,8 @@ Monitor multiple agents, answer their prompts, and watch token spend — from on
 ## Getting started
 
 ```bash
-git clone https://github.com/AlexKay28/Collectif.git
-cd Collectif
+git clone https://github.com/AlexKay28/collectif.git
+cd collectif
 go build -o collectif ./src
 ./collectif                 # binds 127.0.0.1:7317 by default
 ```
@@ -52,7 +52,7 @@ ssh -L 7317:127.0.0.1:7317 you@server
 ## Layout
 
 ```
-Collectif/
+collectif/
   run.sh, README.md
   src/
     main.go            server bootstrap, auth, graceful shutdown
