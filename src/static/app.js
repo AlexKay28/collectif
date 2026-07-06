@@ -727,6 +727,40 @@ function renderTermPanel(mountTerminal) {
   requestAnimationFrame(() => { fitTerminalNow(); });
 }
 
+// Cross-context clipboard helpers. Prefer navigator.clipboard when we're
+// in a secure context (HTTPS / localhost); fall back to the legacy
+// document.execCommand("copy") which works on plain HTTP but requires a
+// short-lived textarea to hold the payload.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* fall through to execCommand */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "-9999px";
+  ta.setAttribute("readonly", "");
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+async function pasteFromClipboard() {
+  try {
+    if (navigator.clipboard && window.isSecureContext && navigator.clipboard.readText) {
+      return await navigator.clipboard.readText();
+    }
+  } catch (_) { /* falls through */ }
+  return "";
+}
+
 // ─── Embedded terminal ──────────────────────────
 let termResizeObserver = null;
 let termResizeTimer = null;
@@ -805,27 +839,31 @@ function mountTerminalFor(id) {
     theme: { background: "#000000" },
     rightClickSelectsWord: true,
   });
-  // Copy on Ctrl+Shift+C / Cmd+C when a selection exists (falls through to
-  // PTY otherwise, so Ctrl+C keeps sending SIGINT to a running process).
-  // Paste on Ctrl+Shift+V / Cmd+V by writing clipboard bytes to the PTY.
+  // Copy on Ctrl+Shift+C / Cmd+C when a selection exists. Falls through
+  // otherwise so plain Ctrl+C keeps sending SIGINT. On non-HTTPS the
+  // Clipboard API silently rejects; execCommand("copy") is a working
+  // fallback that predates the modern API.
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
     const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-    const copy = (ev.ctrlKey && ev.shiftKey && (ev.key === "C" || ev.key === "c"))
-              || (isMac && ev.metaKey && (ev.key === "c" || ev.key === "C"));
+    const copy  = (ev.ctrlKey && ev.shiftKey && (ev.key === "C" || ev.key === "c"))
+               || (isMac && ev.metaKey && !ev.ctrlKey && (ev.key === "c" || ev.key === "C"));
     const paste = (ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"))
-               || (isMac && ev.metaKey && (ev.key === "v" || ev.key === "V"));
+               || (isMac && ev.metaKey && !ev.ctrlKey && (ev.key === "v" || ev.key === "V"));
     if (copy) {
       const sel = term.getSelection();
-      if (sel) {
-        navigator.clipboard.writeText(sel).catch(() => {});
-        return false;
-      }
+      if (!sel) { toast.info("Select text first, then " + (isMac ? "⌘C" : "Ctrl+Shift+C")); return false; }
+      copyToClipboard(sel).then(ok => {
+        if (ok) toast.success("Copied " + sel.length + " chars");
+        else    toast.error("Copy failed — browser blocked clipboard access");
+      });
+      return false;
     }
     if (paste) {
-      navigator.clipboard.readText().then(t => {
-        if (t && termWS && termWS.readyState === 1) termWS.send(t);
-      }).catch(() => {});
+      pasteFromClipboard().then(text => {
+        if (text && termWS && termWS.readyState === 1) termWS.send(text);
+        else if (!text) toast.info("Nothing to paste (clipboard empty or access denied)");
+      });
       return false;
     }
     return true;
