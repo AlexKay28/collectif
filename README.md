@@ -13,7 +13,7 @@ Monitor multiple agents, answer their prompts, and watch token spend — from on
 ```bash
 git clone https://github.com/AlexKay28/Collectif.git
 cd Collectif
-go build -o collectif .
+go build -o collectif ./src
 ./collectif                 # binds 127.0.0.1:7317 by default
 ```
 
@@ -52,14 +52,16 @@ ssh -L 7317:127.0.0.1:7317 you@server
 ## Layout
 
 ```
-collectif/
-  main.go              server bootstrap, auth, graceful shutdown
-  session.go           Session state + registry
-  pty.go               spawn `claude` in a PTY
-  hooks.go             /api/hooks — status derivation
-  menu.go              detects numbered TUI menus in PTY output
-  transcript.go        token counting from Claude's JSONL transcripts
-  api.go, ws.go        HTTP + WebSocket handlers
-  log.go               colorized log output
-  static/index.html    dashboard (single embedded file)
+Collectif/
+  run.sh, README.md
+  src/
+    main.go            server bootstrap, auth, graceful shutdown
+    session.go         Session state + registry
+    pty.go             spawn `claude` in a PTY
+    hooks.go           /api/hooks — status derivation
+    menu.go            detects numbered TUI menus in PTY output
+    transcript.go      token counting from Claude's JSONL transcripts
+    api.go, ws.go      HTTP + WebSocket handlers
+    log.go             colorized log output
+    static/index.html  dashboard (single embedded file)
 ```
