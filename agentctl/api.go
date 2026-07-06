@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,22 @@ import (
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 )
+
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		}
+		return false
+	}
+	return true
+}
+
+const maxBodyBytes = 1 << 20
 
 type spawnReq struct {
 	Cwd    string `json:"cwd"`
@@ -25,8 +42,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, allSessionsJSON())
 	case http.MethodPost:
 		var req spawnReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeBody(w, r, &req) {
 			return
 		}
 		if req.Cwd == "" {
@@ -40,9 +56,11 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 
 		agentID := uuid.NewString()
 		sessionID := uuid.NewString()
+		hookTok := uuid.NewString()
 		s := newSession(agentID, sessionID, req.Cwd, req.Prompt)
+		s.HookToken = hookTok
 
-		settingsDir, settingsFile, err := writeHookSettings(hookURL(hookBind, hookPort))
+		settingsDir, settingsFile, err := writeHookSettings(hookURL(hookBind, hookPort, hookTok))
 		if err != nil {
 			http.Error(w, "settings gen: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -101,13 +119,24 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodDelete:
 		if s.Cmd != nil && s.Cmd.Process != nil {
-			// Kill the whole process group; claude may spawn children.
-			pgid, err := syscall.Getpgid(s.Cmd.Process.Pid)
+			proc := s.Cmd.Process
+			pid := proc.Pid
+			pgid, err := syscall.Getpgid(pid)
 			if err == nil {
 				_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			} else {
-				_ = s.Cmd.Process.Kill()
+				_ = proc.Kill()
 			}
+			time.AfterFunc(3*time.Second, func() {
+				if err := proc.Signal(syscall.Signal(0)); err != nil {
+					return
+				}
+				if pgid, err := syscall.Getpgid(pid); err == nil {
+					_ = syscall.Kill(-pgid, syscall.SIGKILL)
+				} else {
+					_ = proc.Kill()
+				}
+			})
 		}
 		s.setStatus("stopped", "killed")
 		s.closeSubs()
@@ -134,8 +163,7 @@ func handleAgentInput(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	var req inputReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	n, err := s.PTY.Write([]byte(req.Data))
@@ -196,8 +224,7 @@ func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	var req resizeReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Cols < 20 || req.Rows < 5 || req.Cols > 500 || req.Rows > 300 {

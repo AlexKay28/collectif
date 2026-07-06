@@ -60,6 +60,7 @@ type AskQuestionRequest struct {
 type Session struct {
 	ID             string
 	SessionID      string
+	HookToken      string
 	Cwd            string
 	Prompt         string
 	Cmd            *exec.Cmd
@@ -338,12 +339,16 @@ var (
 	registryMu     sync.RWMutex
 	registry       = map[string]*Session{}
 	sessionToAgent = map[string]string{}
+	hookToAgent    = map[string]string{}
 )
 
 func registerSession(s *Session) {
 	registryMu.Lock()
 	registry[s.ID] = s
 	sessionToAgent[s.SessionID] = s.ID
+	if s.HookToken != "" {
+		hookToAgent[s.HookToken] = s.ID
+	}
 	registryMu.Unlock()
 	broadcastDashboard(map[string]any{"type": "upsert", "agent": s.toJSON()})
 }
@@ -354,6 +359,9 @@ func removeSession(id string) {
 	if ok {
 		delete(registry, id)
 		delete(sessionToAgent, s.SessionID)
+		if s.HookToken != "" {
+			delete(hookToAgent, s.HookToken)
+		}
 		if s.SettingsDir != "" {
 			_ = os.RemoveAll(s.SettingsDir)
 		}
@@ -374,6 +382,15 @@ func getSessionBySID(sid string) *Session {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	if aid, ok := sessionToAgent[sid]; ok {
+		return registry[aid]
+	}
+	return nil
+}
+
+func getSessionByHookToken(ht string) *Session {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	if aid, ok := hookToAgent[ht]; ok {
 		return registry[aid]
 	}
 	return nil
