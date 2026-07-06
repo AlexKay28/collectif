@@ -72,7 +72,7 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.TranscriptPath = p.TranscriptPath
 		s.mu.Unlock()
-		startTranscriptWatcher(s)
+		startTranscriptWatcher(s.ctx, s)
 	}
 
 	// Any event that isn't a fresh permission_prompt clears the pending state
@@ -123,7 +123,7 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		// permission prompts, idle timeouts, or arbitrary agent messages.
 		// The type/matcher field varies by version, so classify from the
 		// message text itself.
-		msg := p.Message
+		msg := stripAnsi(p.Message)
 		low := strings.ToLower(msg)
 		isIdle := strings.Contains(low, "idle") ||
 			strings.Contains(low, "still there") ||

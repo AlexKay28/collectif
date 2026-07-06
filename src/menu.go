@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"regexp"
 	"strconv"
 	"strings"
@@ -103,18 +104,20 @@ func menusEqual(a, b []MenuOption) bool {
 // startMenuDetector polls the PTY ring buffer every 250ms, updating the
 // session's MenuOptions when the visible menu changes. Cheap enough per
 // session; the ring snapshot copy is bounded to 8KB in detectMenu.
-func startMenuDetector(s *Session) {
+func startMenuDetector(ctx context.Context, s *Session) {
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
-		for range ticker.C {
-			if getSession(s.ID) == nil {
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			opts := detectMenu(s.snapshotRing())
-			if !menusEqual(opts, s.getMenuOptions()) {
-				s.setMenuOptions(opts)
-				s.touch()
+			case <-ticker.C:
+				opts := detectMenu(s.snapshotRing())
+				if !menusEqual(opts, s.getMenuOptions()) {
+					s.setMenuOptions(opts)
+					s.touch()
+				}
 			}
 		}
 	}()

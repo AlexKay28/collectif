@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+const pendingTTL = 5 * time.Minute
 
 const (
 	ringSize     = 256 * 1024
@@ -29,6 +32,7 @@ type ApprovalRequest struct {
 	Tool      string         `json:"tool,omitempty"`
 	ToolInput map[string]any `json:"toolInput,omitempty"`
 	At        time.Time      `json:"at"`
+	ExpiresAt time.Time      `json:"expiresAt"`
 }
 
 // MenuOption is one item in a numbered TUI menu detected from PTY output.
@@ -106,6 +110,11 @@ type Session struct {
 	transcriptOffset int64
 	watching         bool
 
+	// ctx / cancel stop the per-session background workers (menu detector,
+	// transcript watcher). Set once when the session is created.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu       sync.Mutex
 	ring     []byte
 	ringLen  int
@@ -117,6 +126,7 @@ type Session struct {
 
 func newSession(id, sid, cwd, prompt string) *Session {
 	now := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		ID:          id,
 		SessionID:   sid,
@@ -130,6 +140,8 @@ func newSession(id, sid, cwd, prompt string) *Session {
 		Activity:    nil,
 		ring:        make([]byte, ringSize),
 		subs:        make(map[*websocket.Conn]bool),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	if prompt != "" {
 		s.CurrentTask = prompt
@@ -220,7 +232,8 @@ func (s *Session) recordTool(name string) {
 
 func (s *Session) setPending(msg string) {
 	s.mu.Lock()
-	req := &ApprovalRequest{Message: msg, At: time.Now()}
+	now := time.Now()
+	req := &ApprovalRequest{Message: msg, At: now, ExpiresAt: now.Add(pendingTTL)}
 	// If PreToolUse fired within the last 5 seconds, this permission prompt
 	// is almost certainly for that tool call — surface the specifics.
 	if !s.LastPreToolAt.IsZero() && time.Since(s.LastPreToolAt) < 5*time.Second {
@@ -229,6 +242,12 @@ func (s *Session) setPending(msg string) {
 	}
 	s.Pending = req
 	s.mu.Unlock()
+}
+
+func (s *Session) pendingExpired() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Pending != nil && !s.Pending.ExpiresAt.IsZero() && time.Now().After(s.Pending.ExpiresAt)
 }
 
 func (s *Session) setAskQuestion(q *AskQuestionRequest) {
@@ -271,6 +290,12 @@ func (s *Session) clearPending() {
 	s.mu.Unlock()
 }
 
+func (s *Session) hasPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Pending != nil
+}
+
 func (s *Session) pushTask(prompt string) {
 	if prompt == "" {
 		return
@@ -300,6 +325,9 @@ func (s *Session) toJSON() map[string]any {
 		m := map[string]any{
 			"message": s.Pending.Message,
 			"at":      s.Pending.At.Format(time.RFC3339),
+		}
+		if !s.Pending.ExpiresAt.IsZero() {
+			m["expiresAt"] = s.Pending.ExpiresAt.Format(time.RFC3339)
 		}
 		if s.Pending.Tool != "" {
 			m["tool"] = s.Pending.Tool
@@ -368,6 +396,9 @@ func removeSession(id string) {
 	}
 	registryMu.Unlock()
 	if ok {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		broadcastDashboard(map[string]any{"type": "remove", "id": id})
 	}
 }
@@ -463,4 +494,29 @@ func broadcastDashboard(msg map[string]any) {
 	for _, c := range conns {
 		_ = c.WriteMessage(websocket.TextMessage, b)
 	}
+}
+
+// startPendingSweeper clears stale ApprovalRequests whose ExpiresAt has passed.
+// A Notification hook may fire and Claude then crash or hang — without this
+// the amber banner would stick forever.
+func startPendingSweeper() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			registryMu.RLock()
+			sessions := make([]*Session, 0, len(registry))
+			for _, s := range registry {
+				sessions = append(sessions, s)
+			}
+			registryMu.RUnlock()
+			for _, s := range sessions {
+				if s.pendingExpired() {
+					s.clearPending()
+					s.appendActivity(ActivityEntry{Event: "PermissionPromptExpired", Level: "warn"})
+					s.touch()
+				}
+			}
+		}
+	}()
 }

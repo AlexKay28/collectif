@@ -49,6 +49,8 @@ func main() {
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
 
+	startPendingSweeper()
+
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)
 	log.Printf("Auth token: %s", authToken)
