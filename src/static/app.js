@@ -1103,7 +1103,9 @@ function updateTeamVisibility() {
   const a = selectedId ? agents.get(selectedId) : null;
   const team = document.getElementById("dash-team-panel");
   const metrics = document.getElementById("dash-right-metrics");
+  const main = document.querySelector(".dash-main");
   if (!team || !metrics) return;
+  if (main) main.classList.toggle("no-agent", !a);
   if (a) {
     team.style.display = "flex";
     metrics.style.display = "none";
