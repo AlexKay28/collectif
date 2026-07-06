@@ -841,6 +841,7 @@ function renderTermPanel(mountTerminal) {
   const task = a.currentTask || a.prompt || "";
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
   renderFamilyLine(a);
+  renderSubagentsStrip(a);
 
   if (mountTerminal) mountTerminalFor(a.id);
   // If we didn't remount, the terminal is still bound to the previous agent.
@@ -874,6 +875,104 @@ function renderFamilyLine(a) {
     btn.onclick = () => selectAgent(btn.dataset.id);
   });
 }
+
+// Sub-agents chip strip in the terminal head. One chip per direct child,
+// each with Tail / Send / Kill microbuttons that mirror the `collectif`
+// CLI verbs — this is just a click shortcut for the same operations.
+function renderSubagentsStrip(a) {
+  const el = document.getElementById("d-subagents");
+  if (!el) return;
+  const children = [];
+  for (const other of agents.values()) {
+    if (other.parentId === a.id) children.push(other);
+  }
+  if (children.length === 0) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "";
+  el.innerHTML = children.map(c => (
+    '<span class="subagent-chip ' + (c.status || "idle") + '" data-id="' + esc(c.id) + '">' +
+      '<span class="sa-avatar"><img src="' + avatarURL(c.id) + '" alt=""></span>' +
+      '<span class="sa-name" data-act="open">' + esc(agentName(c)) + '</span>' +
+      '<span class="sa-actions">' +
+        '<button data-act="tail" title="Show recent terminal output">tail</button>' +
+        '<button data-act="send" title="Send text to this child\'s PTY">send</button>' +
+        '<button class="k" data-act="kill" title="Kill this child">kill</button>' +
+      '</span>' +
+    '</span>'
+  )).join('');
+  el.querySelectorAll(".sa-name").forEach(n => {
+    n.onclick = () => selectAgent(n.closest(".subagent-chip").dataset.id);
+  });
+  el.querySelectorAll(".sa-actions button").forEach(btn => {
+    const id = btn.closest(".subagent-chip").dataset.id;
+    const act = btn.dataset.act;
+    if (act === "tail") btn.onclick = () => openTailModal(id);
+    else if (act === "send") btn.onclick = () => openSendModal(id);
+    else if (act === "kill") armConfirmButton(btn, {
+      armedLabel: "click again",
+      onConfirm: async () => {
+        try {
+          const res = await fetch("/api/agents/" + id, { method: "DELETE" });
+          if (!res.ok) toast.error("Kill failed: " + res.status + " " + (await res.text()));
+        } catch (err) { toast.error("Kill failed: " + err.message); }
+      },
+    });
+  });
+}
+
+// Tail modal: shows recent ANSI-stripped output from a child, refreshable.
+let tailModalAgentID = null;
+function openTailModal(agentID) {
+  tailModalAgentID = agentID;
+  const a = agents.get(agentID);
+  document.getElementById("tail-title").textContent = "Tail — " + (a ? agentName(a) : agentID.slice(0, 8));
+  document.getElementById("tail-body").textContent = "loading…";
+  document.getElementById("tail-modal").classList.add("show");
+  refreshTailModal();
+}
+async function refreshTailModal() {
+  if (!tailModalAgentID) return;
+  const res = await fetch("/api/agents/" + tailModalAgentID + "/output?bytes=16384");
+  document.getElementById("tail-body").textContent = res.ok ? (await res.text()) : ("[error " + res.status + "]");
+}
+document.getElementById("tail-refresh").onclick = refreshTailModal;
+document.getElementById("tail-close").onclick = () => {
+  document.getElementById("tail-modal").classList.remove("show");
+  tailModalAgentID = null;
+};
+
+// Send modal: writes text (+ CR) to a child's PTY.
+let sendModalAgentID = null;
+function openSendModal(agentID) {
+  sendModalAgentID = agentID;
+  const a = agents.get(agentID);
+  document.getElementById("send-title").textContent = "Send to " + (a ? agentName(a) : agentID.slice(0, 8));
+  const input = document.getElementById("send-input");
+  input.value = "";
+  document.getElementById("send-modal").classList.add("show");
+  input.focus();
+}
+async function submitSendModal() {
+  const text = document.getElementById("send-input").value;
+  if (!text || !sendModalAgentID) return;
+  const data = text.endsWith("\n") || text.endsWith("\r") ? text : text + "\r";
+  const res = await fetch("/api/agents/" + sendModalAgentID + "/input", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) { toast.error("Send failed: " + (await res.text())); return; }
+  toast.success("Sent");
+  document.getElementById("send-modal").classList.remove("show");
+  sendModalAgentID = null;
+}
+document.getElementById("send-ok").onclick = submitSendModal;
+document.getElementById("send-cancel").onclick = () => {
+  document.getElementById("send-modal").classList.remove("show");
+  sendModalAgentID = null;
+};
+document.getElementById("send-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); submitSendModal(); }
+});
 
 // ─── Embedded terminal ──────────────────────────
 let termResizeObserver = null;
