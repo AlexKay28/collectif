@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>agentctl</title>
+<title>collectif</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <style>
   :root {
@@ -414,7 +414,7 @@
 <body>
 <div id="app">
   <header>
-    <h1>agentctl</h1>
+    <h1>collectif</h1>
     <div class="stats">
       <div class="stat"><span class="lab">Agents</span><span class="val" id="stat-total">0</span></div>
       <div class="stat act"><span class="dot"></span><span class="lab">Active</span><span class="val" id="stat-active">0</span></div>
@@ -517,15 +517,15 @@
   const url = new URL(location.href);
   const fromURL = url.searchParams.get("token");
   if (fromURL) {
-    sessionStorage.setItem("agentctl.token", fromURL);
+    sessionStorage.setItem("collectif.token", fromURL);
     url.searchParams.delete("token");
     history.replaceState(null, "", url.pathname + (url.search ? url.search : "") + url.hash);
   }
-  const tok = sessionStorage.getItem("agentctl.token");
+  const tok = sessionStorage.getItem("collectif.token");
   if (!tok) {
     document.body.innerHTML =
       '<div style="max-width:360px;margin:15vh auto;padding:24px;background:#161b22;border:1px solid #30363d;border-radius:8px;color:#e6edf3;font:14px/1.5 -apple-system,sans-serif">' +
-        '<h2 style="margin:0 0 12px;font-size:16px">agentctl auth</h2>' +
+        '<h2 style="margin:0 0 12px;font-size:16px">collectif auth</h2>' +
         '<div style="color:#7d8590;font-size:12.5px;margin-bottom:12px">Paste the auth token printed on the server console.</div>' +
         '<input id="auth-tok" type="text" style="width:100%;padding:8px 10px;font:13px ui-monospace,monospace;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3" placeholder="token" autofocus />' +
         '<button id="auth-save" style="margin-top:12px;width:100%;padding:8px 12px;background:#238636;border:1px solid #2ea043;color:#fff;border-radius:6px;font:600 13px -apple-system,sans-serif;cursor:pointer">Save &amp; reload</button>' +
@@ -533,7 +533,7 @@
     const save = () => {
       const v = document.getElementById("auth-tok").value.trim();
       if (!v) return;
-      sessionStorage.setItem("agentctl.token", v);
+      sessionStorage.setItem("collectif.token", v);
       location.reload();
     };
     document.getElementById("auth-save").onclick = save;
@@ -550,7 +550,7 @@
     init.headers = headers;
     return origFetch(input, init).then((res) => {
       if (res.status === 401) {
-        sessionStorage.removeItem("agentctl.token");
+        sessionStorage.removeItem("collectif.token");
         location.reload();
       }
       return res;
@@ -642,7 +642,7 @@ function renderStats() {
   document.getElementById("stat-pending").textContent = pending;
   pw.style.display = pending > 0 ? "" : "none";
   // Also flash the browser tab title when something needs input.
-  document.title = pending > 0 ? "(" + pending + "!) agentctl" : "agentctl";
+  document.title = pending > 0 ? "(" + pending + "!) collectif" : "collectif";
 }
 
 // ─── Cost estimate (rough Sonnet 4.6 pricing) ───
@@ -998,7 +998,7 @@ function tileTokCost(lab, val, sub) {
 // ─── Sidebar (with user-defined order + drag) ───
 // Persist manual order in localStorage. New agents append; missing ids in
 // storage default to their spawn time.
-const ORDER_KEY = "agentctl.sidebarOrder";
+const ORDER_KEY = "collectif.sidebarOrder";
 function loadOrder() {
   try { return JSON.parse(localStorage.getItem(ORDER_KEY) || "[]"); } catch (_) { return []; }
 }

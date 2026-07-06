@@ -218,7 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Go build artifacts
-agentctl/agentctl
+/collectif
 *.exe
 *.test
 *.out
+/.claude/

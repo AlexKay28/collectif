@@ -11,7 +11,7 @@ import (
 // with HTTP hooks pointing at our /api/hooks endpoint. Claude is launched with
 // --settings <file> so these override any project/user settings.
 func writeHookSettings(hookURL string) (settingsDir, settingsFile string, err error) {
-	dir, err := os.MkdirTemp("", "agentctl-settings-")
+	dir, err := os.MkdirTemp("", "collectif-settings-")
 	if err != nil {
 		return "", "", err
 	}

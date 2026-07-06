@@ -50,7 +50,7 @@ func main() {
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
 
 	addr := *bind + ":" + *port
-	log.Printf("agentctl listening on http://%s", addr)
+	log.Printf("collectif listening on http://%s", addr)
 	log.Printf("Auth token: %s", authToken)
 	log.Printf("Open http://%s:%s/?token=%s", *bind, *port, authToken)
 

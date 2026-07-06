@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Build (if needed) and run the agentctl server.
-# Usage: ./run.sh [-- extra flags passed to agentctl]
+# Build (if needed) and run the collectif server.
+# Usage: ./run.sh [flags passed to the binary]
 #   ./run.sh
 #   ./run.sh -port 8080
 #   ./run.sh -bind 127.0.0.1 -port 7317
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/agentctl/agentctl"
-SRC_DIR="$ROOT/agentctl"
+BIN="$ROOT/collectif"
 
 # Prefer a Go on PATH; fall back to a user-space install at ~/go-sdk.
 if ! command -v go >/dev/null 2>&1; then
@@ -31,13 +30,13 @@ if [[ ! -x "$BIN" ]]; then
 else
   while IFS= read -r -d '' f; do
     if [[ "$f" -nt "$BIN" ]]; then needs_build=1; break; fi
-  done < <(find "$SRC_DIR" -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -path '*/static/*' \) -print0)
+  done < <(find "$ROOT" -maxdepth 2 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -path '*/static/*' \) -not -path '*/.git/*' -not -path '*/.claude/*' -print0)
 fi
 
 if [[ "$needs_build" -eq 1 ]]; then
-  echo "building agentctl..."
-  (cd "$SRC_DIR" && go build -o agentctl .)
+  echo "building collectif..."
+  (cd "$ROOT" && go build -o collectif .)
 fi
 
-echo "starting agentctl (Ctrl+C to stop)"
+echo "starting collectif (Ctrl+C to stop)"
 exec "$BIN" "$@"

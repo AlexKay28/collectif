@@ -1,4 +1,4 @@
-module github.com/collectif/agentctl
+module github.com/AlexKay28/collectif
 
 go 1.23.4
 
