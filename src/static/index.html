@@ -56,6 +56,7 @@
                   <div class="family" id="d-family"></div>
                 </div>
                 <div class="actions">
+                  <button id="d-child" title="Spawn a child agent under this one">+ Child</button>
                   <button id="d-kill" class="ghost">Kill</button>
                 </div>
               </div>
@@ -99,7 +100,8 @@
 
 <div id="modal">
   <div class="box">
-    <h3>Spawn a new agent</h3>
+    <h3 id="modal-title">Spawn a new agent</h3>
+    <div id="modal-parent-hint" style="color: var(--waiting); font-size: 12px; margin-top: 4px; display:none"></div>
     <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">A new Claude Code session will start in a PTY on this server.</div>
     <label>Working directory (absolute path)
       <input id="cwd-input" placeholder="/home/you/project" />

@@ -1054,22 +1054,45 @@ cwdInput.addEventListener("input", () => {
   cwdCheckTimer = setTimeout(() => validateCwd(path), 300);
 });
 
-document.getElementById("new-btn").onclick = () => {
-  cwdInput.value = "";
+// Spawn modal: parentAgentID is set when the user opens the modal via the
+// terminal head's "+ Child" button. Cleared for the top-bar "+ New Agent".
+let modalParentAgentID = "";
+function openSpawnModal(parentAgent) {
+  modalParentAgentID = parentAgent ? parentAgent.id : "";
+  cwdInput.value = parentAgent && parentAgent.cwd ? parentAgent.cwd : "";
   document.getElementById("prompt-input").value = "";
   cwdHint.textContent = "";
   cwdHint.className = "cwd-hint";
+  document.getElementById("modal-title").textContent =
+    parentAgent ? "Spawn a child agent" : "Spawn a new agent";
+  const hint = document.getElementById("modal-parent-hint");
+  if (parentAgent) {
+    hint.textContent = "Parent: " + agentName(parentAgent) + " (" + parentAgent.id.slice(0, 8) + ")";
+    hint.style.display = "";
+  } else {
+    hint.style.display = "none";
+    hint.textContent = "";
+  }
   document.getElementById("modal").classList.add("show");
   cwdInput.focus();
+}
+document.getElementById("new-btn").onclick = () => openSpawnModal(null);
+document.getElementById("d-child").onclick = () => {
+  const parent = selectedId ? agents.get(selectedId) : null;
+  if (!parent) { toast.error("Select an agent to spawn a child of it"); return; }
+  openSpawnModal(parent);
 };
 document.getElementById("cancel-btn").onclick = () => document.getElementById("modal").classList.remove("show");
 document.getElementById("create-btn").onclick = async () => {
   const cwd = cwdInput.value.trim();
   const prompt = document.getElementById("prompt-input").value.trim();
   if (!cwd) { toast.error("cwd is required"); return; }
-  const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({cwd, prompt}) });
+  const body = { cwd, prompt };
+  if (modalParentAgentID) body.parentAgentID = modalParentAgentID;
+  const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
   if (!res.ok) { toast.error("Spawn failed: " + await res.text()); return; }
   document.getElementById("modal").classList.remove("show");
+  modalParentAgentID = "";
 };
 
 // Return to dashboard: click the header logo.
