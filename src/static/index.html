@@ -1167,8 +1167,12 @@ function renderTermPanel(mountTerminal) {
 let termResizeObserver = null;
 let termResizeTimer = null;
 let lastCols = 0, lastRows = 0;
+let termGen = 0;
+let termBackoff = 1000;
+const TERM_BACKOFF_MAX = 15000;
 
 function teardownTerminal() {
+  termGen++;
   window.removeEventListener("resize", onTermResize);
   if (termResizeObserver) { termResizeObserver.disconnect(); termResizeObserver = null; }
   if (termResizeTimer) { clearTimeout(termResizeTimer); termResizeTimer = null; }
@@ -1198,35 +1202,32 @@ function onTermResize() {
   if (termResizeTimer) clearTimeout(termResizeTimer);
   termResizeTimer = setTimeout(() => { termResizeTimer = null; fitTerminalNow(); }, 80);
 }
-let termBackoff = 1000;
-const TERM_BACKOFF_MAX = 15000;
-function connectTerminalWS(id) {
-  // Only (re)connect if we're still mounted for this agent.
-  if (termAgentId !== id || !term) return;
+function connectTerminalWS(id, gen) {
+  // Only (re)connect if we're still mounted for the same agent + generation.
+  if (termAgentId !== id || !term || gen !== termGen) return;
   // The server flushes the ring buffer as the first frames; after that first
   // write, scroll to the bottom so the user lands at the current prompt.
   let justConnected = true;
-  termWS = new WebSocket(wsURL("/ws/session/" + id));
-  termWS.binaryType = "arraybuffer";
-  termWS.onopen = () => { termBackoff = 1000; };
-  termWS.onmessage = (ev) => {
+  const ws = new WebSocket(wsURL("/ws/session/" + id));
+  termWS = ws;
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { termBackoff = 1000; };
+  ws.onmessage = (ev) => {
+    if (gen !== termGen || !term) return;
     if (typeof ev.data === "string") term.write(ev.data);
     else term.write(new Uint8Array(ev.data));
     if (justConnected) {
       justConnected = false;
-      requestAnimationFrame(() => { if (term) term.scrollToBottom(); });
+      requestAnimationFrame(() => { if (term && gen === termGen) term.scrollToBottom(); });
     }
   };
-  const scheduleReconnect = () => {
-    if (termAgentId !== id || !term) return;
-    setTimeout(() => connectTerminalWS(id), termBackoff);
+  ws.onclose = () => {
+    if (gen !== termGen || termAgentId !== id || !term) return;
+    term.write("\r\n[disconnected, reconnecting…]\r\n");
+    setTimeout(() => connectTerminalWS(id, gen), termBackoff);
     termBackoff = Math.min(termBackoff * 2, TERM_BACKOFF_MAX);
   };
-  termWS.onclose = () => {
-    if (term && termAgentId === id) term.write("\r\n[disconnected, reconnecting…]\r\n");
-    scheduleReconnect();
-  };
-  termWS.onerror = () => { try { termWS.close(); } catch (_) {} };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
 }
 function mountTerminalFor(id) {
   if (termAgentId === id && term) return;
@@ -1248,7 +1249,8 @@ function mountTerminalFor(id) {
   if (body) termResizeObserver.observe(body);
 
   termBackoff = 1000;
-  connectTerminalWS(id);
+  const gen = ++termGen;
+  connectTerminalWS(id, gen);
   term.onData((d) => { if (termWS && termWS.readyState === 1) termWS.send(d); });
 }
 
