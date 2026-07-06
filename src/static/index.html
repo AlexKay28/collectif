@@ -142,6 +142,12 @@
         <option value="opus">opus</option>
       </select>
     </label>
+    <label>Scope
+      <select id="sa-scope">
+        <option value="project">Project (&lt;cwd&gt;/.claude/agents/)</option>
+        <option value="user">User (~/.claude/agents/ — shared across projects)</option>
+      </select>
+    </label>
     <label>Tools <span class="hint">(comma-separated, leave blank to inherit)</span>
       <input id="sa-tools" placeholder="Read, Grep, Bash" autocomplete="off">
     </label>

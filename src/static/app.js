@@ -1229,11 +1229,13 @@ function renderTeamCanvas() {
     if (!p) return "";
     const toolsBadge = (sf.tools || []).length > 0 ? '<span class="badge">' + esc((sf.tools || []).length + " tool" + ((sf.tools || []).length === 1 ? "" : "s")) + '</span>' : "";
     const modelBadge = sf.model ? '<span class="badge model">' + esc(sf.model) + '</span>' : "";
+    const scopeBadge = sf.scope ? '<span class="badge scope ' + esc(sf.scope) + '" title="' + (sf.scope === "user" ? "~/.claude/agents/ (shared across all your projects)" : "&lt;cwd&gt;/.claude/agents/") + '">' + esc(sf.scope) + '</span>' : "";
+    const scopeClass = sf.scope === "user" ? " user-scope" : "";
     return (
-      '<div class="team-node" data-name="' + esc(sf.name) + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_NODE_H + 'px">' +
+      '<div class="team-node' + scopeClass + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + TEAM_NODE_W + 'px;height:' + TEAM_NODE_H + 'px">' +
         '<div class="name">' + esc(sf.name) + '</div>' +
         '<div class="desc">' + esc(sf.description || "") + '</div>' +
-        '<div class="badges">' + modelBadge + toolsBadge + '</div>' +
+        '<div class="badges">' + modelBadge + toolsBadge + scopeBadge + '</div>' +
       '</div>'
     );
   }).join("");
@@ -1249,18 +1251,23 @@ function renderTeamCanvas() {
     '</div>'
   );
   canvas.querySelectorAll(".team-node[data-name]").forEach(n => {
-    n.onclick = () => openSubagentModal(n.dataset.name);
+    n.onclick = () => openSubagentModal(n.dataset.name, n.dataset.scope);
   });
 }
 
-function openSubagentModal(name) {
+let teamEditingScope = "project";
+function openSubagentModal(name, scope) {
   teamEditingName = name || "";
+  teamEditingScope = scope || "project";
   const sf = name ? teamSubagents.find(x => x.name === name) : null;
+  if (sf && sf.scope) teamEditingScope = sf.scope;
   document.getElementById("sa-title").textContent = name ? "Edit " + name : "New subagent";
   document.getElementById("sa-name").value = sf ? sf.name : "";
   document.getElementById("sa-name").disabled = !!name;
   document.getElementById("sa-desc").value = sf ? (sf.description || "") : "";
   document.getElementById("sa-model").value = sf ? (sf.model || "") : "";
+  const scopeSel = document.getElementById("sa-scope");
+  if (scopeSel) { scopeSel.value = teamEditingScope; scopeSel.disabled = !!name; }
   document.getElementById("sa-tools").value = sf ? (sf.tools || []).join(", ") : "";
   document.getElementById("sa-prompt").value = sf ? (sf.prompt || "") : "";
   // Delegation checkboxes: every other subagent except self.
@@ -1288,6 +1295,10 @@ async function saveSubagent() {
     toast.error("Name must match a–z 0–9 - (max 64 chars)");
     return;
   }
+  // For new subagents, honour the scope dropdown; for edits, teamEditingScope
+  // was captured from the clicked node so we overwrite the correct file.
+  const scopeSel = document.getElementById("sa-scope");
+  if (!teamEditingName && scopeSel) teamEditingScope = scopeSel.value || "project";
   const body = {
     name,
     description: document.getElementById("sa-desc").value.trim(),
@@ -1297,21 +1308,22 @@ async function saveSubagent() {
     prompt: document.getElementById("sa-prompt").value,
   };
   try {
-    const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(name), {
+    const scope = teamEditingScope || "project";
+    const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(name) + "?scope=" + encodeURIComponent(scope), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!res.ok) { toast.error("Save failed: " + (await res.text())); return; }
-    toast.success("Saved " + name);
+    toast.success("Saved " + name + " (" + scope + ")");
   } catch (err) { toast.error("Save failed: " + err.message); return; }
   closeSubagentModal();
   refreshTeam();
 }
 async function deleteSubagent() {
   if (!teamEditingName) return;
-  if (!confirm("Delete subagent " + teamEditingName + "?")) return;
-  const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(teamEditingName), { method: "DELETE" });
+  if (!confirm("Delete subagent " + teamEditingName + " (" + teamEditingScope + ")?")) return;
+  const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(teamEditingName) + "?scope=" + encodeURIComponent(teamEditingScope), { method: "DELETE" });
   if (!res.ok) { toast.error("Delete failed: " + (await res.text())); return; }
   toast.success("Deleted " + teamEditingName);
   closeSubagentModal();
