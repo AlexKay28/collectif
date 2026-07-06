@@ -31,11 +31,6 @@
 
         <div class="hero-strip" id="dash-hero"></div>
 
-        <div id="dash-dag-wrap" style="display:none">
-          <h3>Agents <span class="count" id="dag-count">0</span></h3>
-          <div id="dash-dag" class="dag"></div>
-        </div>
-
         <div class="dash-main">
           <!-- LEFT: embedded terminal panel for the selected agent -->
           <div class="dash-left">
@@ -53,11 +48,8 @@
                   </div>
                   <div class="cwd" id="d-cwd"></div>
                   <div class="task" id="d-task"></div>
-                  <div class="family" id="d-family"></div>
-                  <div class="subagents" id="d-subagents"></div>
                 </div>
                 <div class="actions">
-                  <button id="d-child" title="Spawn a child agent under this one">+ Child</button>
                   <button id="d-kill" class="ghost">Kill</button>
                 </div>
               </div>
@@ -101,8 +93,7 @@
 
 <div id="modal">
   <div class="box">
-    <h3 id="modal-title">Spawn a new agent</h3>
-    <div id="modal-parent-hint" style="color: var(--waiting); font-size: 12px; margin-top: 4px; display:none"></div>
+    <h3>Spawn a new agent</h3>
     <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">A new Claude Code session will start in a PTY on this server.</div>
     <label>Working directory (absolute path)
       <input id="cwd-input" placeholder="/home/you/project" />

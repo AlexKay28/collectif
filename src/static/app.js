@@ -152,7 +152,7 @@ function armConfirmButton(btn, opts) {
 // rebuilt every section synchronously. Split into per-section renderers and
 // coalesce dirty sections into a single rAF so bursts of WS messages produce
 // exactly one paint. `scheduleRender('all')` invalidates every section.
-const SECTIONS = ["stats", "sidebar", "dag", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term"];
+const SECTIONS = ["stats", "sidebar", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term"];
 const dirty = new Set();
 let rafPending = false;
 function scheduleRender(section) {
@@ -170,7 +170,6 @@ function flushRender() {
   dirty.clear();
   if (now.has("stats"))         renderStats();
   if (now.has("sidebar"))       renderSidebar();
-  if (now.has("dag"))           renderDAG();
   if (now.has("pending"))       renderPending();
   if (now.has("trends"))        renderTrends();
   if (now.has("tokens"))        renderTokens();
@@ -418,121 +417,6 @@ function renderToolUsage() {
     : toolEntries.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('');
 }
 
-// ─── Agent DAG (overview) ───────────────────────
-// Layout: recursive Reingold-Tilford-lite. Each subtree computes its total
-// width from its leaves; parents sit centered over their children. Multiple
-// roots (independent user-spawned agents) are laid out side-by-side.
-// Nodes are absolutely-positioned HTML for reuse of the existing CSS;
-// edges are an SVG overlay in the same coordinate space.
-const DAG_NODE_W = 200;
-const DAG_NODE_H = 56;
-const DAG_X_GAP  = 22;
-const DAG_Y_GAP  = 42;
-
-function buildDAGForest() {
-  const arr = Array.from(agents.values());
-  const byId = new Map(arr.map(a => [a.id, a]));
-  const children = new Map();
-  for (const a of arr) {
-    const p = a.parentId && byId.has(a.parentId) ? a.parentId : null;
-    if (!children.has(p)) children.set(p, []);
-    children.get(p).push(a);
-  }
-  for (const [, list] of children) {
-    list.sort((x, y) => (x.createdAt || "").localeCompare(y.createdAt || ""));
-  }
-  const roots = children.get(null) || [];
-  return { roots, children };
-}
-function layoutSubtree(node, children, x, y, positions) {
-  const kids = children.get(node.id) || [];
-  if (kids.length === 0) {
-    positions.set(node.id, { x, y });
-    return DAG_NODE_W;
-  }
-  const childY = y + DAG_NODE_H + DAG_Y_GAP;
-  let childX = x;
-  const widths = [];
-  for (const k of kids) {
-    const w = layoutSubtree(k, children, childX, childY, positions);
-    widths.push(w);
-    childX += w + DAG_X_GAP;
-  }
-  const totalW = widths.reduce((s, w) => s + w, 0) + DAG_X_GAP * (kids.length - 1);
-  positions.set(node.id, { x: x + totalW / 2 - DAG_NODE_W / 2, y });
-  return Math.max(DAG_NODE_W, totalW);
-}
-function renderDAG() {
-  const wrap = document.getElementById("dash-dag-wrap");
-  const host = document.getElementById("dash-dag");
-  const arr = Array.from(agents.values());
-  document.getElementById("dag-count").textContent = arr.length;
-  if (arr.length === 0) { wrap.style.display = "none"; return; }
-  wrap.style.display = "";
-
-  const { roots, children } = buildDAGForest();
-  const positions = new Map();
-  let cursorX = 0;
-  let maxDepth = 0;
-  const measureDepth = (n, d) => {
-    maxDepth = Math.max(maxDepth, d);
-    for (const k of children.get(n.id) || []) measureDepth(k, d + 1);
-  };
-  for (const r of roots) {
-    const w = layoutSubtree(r, children, cursorX, 0, positions);
-    cursorX += w + DAG_X_GAP * 2;
-    measureDepth(r, 0);
-  }
-  const totalW = Math.max(DAG_NODE_W, cursorX - DAG_X_GAP * 2);
-  const totalH = (maxDepth + 1) * DAG_NODE_H + maxDepth * DAG_Y_GAP;
-
-  const edges = [];
-  for (const a of arr) {
-    if (!a.parentId) continue;
-    const p = positions.get(a.parentId);
-    const c = positions.get(a.id);
-    if (!p || !c) continue;
-    const x1 = p.x + DAG_NODE_W / 2, y1 = p.y + DAG_NODE_H;
-    const x2 = c.x + DAG_NODE_W / 2, y2 = c.y;
-    const mid = (y1 + y2) / 2;
-    edges.push('<path class="edge" d="M ' + x1 + ',' + y1 + ' C ' + x1 + ',' + mid + ' ' + x2 + ',' + mid + ' ' + x2 + ',' + y2 + '" marker-end="url(#dag-arrow)"/>');
-  }
-
-  const nodes = arr.map(a => {
-    const pos = positions.get(a.id);
-    if (!pos) return "";
-    const status = a.status || "idle";
-    const activity = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
-    const cls = "dag-node " + status + (a.pending ? " pending" : "");
-    return (
-      '<div class="' + cls + '" data-id="' + esc(a.id) + '" style="left:' + pos.x + 'px;top:' + pos.y + 'px;width:' + DAG_NODE_W + 'px;height:' + DAG_NODE_H + 'px">' +
-        '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
-        '<div class="info">' +
-          '<div class="name">' + esc(agentName(a)) + '</div>' +
-          '<div class="sub">' + esc(activity || cwdBase(a.cwd)) + '</div>' +
-        '</div>' +
-      '</div>'
-    );
-  }).join('');
-
-  host.innerHTML =
-    '<div class="canvas" style="width:' + totalW + 'px;height:' + totalH + 'px">' +
-      '<svg width="' + totalW + '" height="' + totalH + '">' +
-        '<defs>' +
-          '<marker id="dag-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">' +
-            '<path class="arrow" d="M0,0 L0,6 L9,3 z"/>' +
-          '</marker>' +
-        '</defs>' +
-        edges.join('') +
-      '</svg>' +
-      nodes +
-    '</div>';
-
-  host.querySelectorAll(".dag-node").forEach(n => {
-    n.onclick = () => selectAgent(n.dataset.id);
-  });
-}
-
 function renderTrends() {
   drawSparkline("chart-active", trend.map(s => s.active), { yMin: 0 });
   document.getElementById("chart-active-val").textContent = trend.length ? trend[trend.length - 1].active : "0";
@@ -713,8 +597,6 @@ function renderSidebar() {
     const task = a.currentTask || a.prompt || "";
     const activityText = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
     const tokTotal = (a.inputTokens || 0) + (a.outputTokens || 0);
-    let childCount = 0;
-    for (const other of agents.values()) if (other.parentId === a.id) childCount++;
     c.innerHTML = (
       '<button class="kill-btn" draggable="false" title="Kill agent">×</button>' +
       '<div class="card-head">' +
@@ -722,8 +604,6 @@ function renderSidebar() {
         '<div class="card-body">' +
           '<div class="card-name"><span class="name">' + esc(agentName(a)) + '</span>' +
           (a.pending ? '<span class="pending-badge">Action</span>' : '') +
-          (childCount > 0 ? '<span class="child-badge" title="Has children">↳ ' + childCount + '</span>' : '') +
-          (a.parentId ? '<span class="parent-badge" title="Has a parent agent">↑</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
           '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
           '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span></div>' +
@@ -840,78 +720,11 @@ function renderTermPanel(mountTerminal) {
   document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace("_", " ")) + '</span>';
   const task = a.currentTask || a.prompt || "";
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
-  renderFamilyLine(a);
-  renderSubagentsStrip(a);
 
   if (mountTerminal) mountTerminalFor(a.id);
   // If we didn't remount, the terminal is still bound to the previous agent.
   // Fit again in case the panel resized.
   requestAnimationFrame(() => { fitTerminalNow(); });
-}
-
-// Family strip in the terminal head: ↑ parent · ↳ children. Only visible
-// when the selected agent has a parent or a child; both are clickable to
-// drill into the related agent.
-function renderFamilyLine(a) {
-  const el = document.getElementById("d-family");
-  if (!el) return;
-  const parent = a.parentId ? agents.get(a.parentId) : null;
-  const children = [];
-  for (const other of agents.values()) {
-    if (other.parentId === a.id) children.push(other);
-  }
-  if (!parent && children.length === 0) { el.style.display = "none"; el.innerHTML = ""; return; }
-  el.style.display = "";
-  const chip = (rel, other) =>
-    '<button class="family-chip" data-id="' + esc(other.id) + '" title="' + esc(other.cwd || "") + '">' +
-      rel + ' <span class="mini-avatar"><img src="' + avatarURL(other.id) + '" alt=""></span> ' +
-      esc(agentName(other)) +
-    '</button>';
-  const parts = [];
-  if (parent) parts.push(chip("↑", parent));
-  for (const c of children) parts.push(chip("↳", c));
-  el.innerHTML = parts.join(" ");
-  el.querySelectorAll(".family-chip").forEach(btn => {
-    btn.onclick = () => selectAgent(btn.dataset.id);
-  });
-}
-
-// Sub-agents info panel in the terminal head. Read-only: one row per direct
-// child showing status + task + tokens + last activity. Click a row to drill
-// into that child. Any control over these children happens naturally in
-// this parent's own conversation — not from a dashboard button strip.
-function renderSubagentsStrip(a) {
-  const el = document.getElementById("d-subagents");
-  if (!el) return;
-  const children = [];
-  for (const other of agents.values()) {
-    if (other.parentId === a.id) children.push(other);
-  }
-  if (children.length === 0) { el.style.display = "none"; el.innerHTML = ""; return; }
-  el.style.display = "";
-  const rows = children.map(c => {
-    const status = c.status || "idle";
-    const task = c.currentTask || c.prompt || "";
-    const activity = c.lastActivity || (c.lastTool ? "✓ " + c.lastTool : "");
-    const desc = task ? '<span class="sa-task">▸ ' + esc(task) + '</span>' + (activity ? " · " + esc(activity) : "")
-                     : (activity ? esc(activity) : esc(cwdBase(c.cwd)));
-    const tok = (c.inputTokens || 0) + (c.outputTokens || 0);
-    return (
-      '<div class="subagent-row ' + status + '" data-id="' + esc(c.id) + '">' +
-        '<span class="sa-avatar"><img src="' + avatarURL(c.id) + '" alt=""></span>' +
-        '<div class="sa-info">' +
-          '<span class="sa-name">' + esc(agentName(c)) + '</span>' +
-          '<span style="color:var(--muted); font-size: 10.5px"> · ' + esc(status.replace("_", " ")) + '</span>' +
-          '<div class="sa-desc">' + desc + '</div>' +
-        '</div>' +
-        '<div class="sa-tok">' + (tok > 0 ? fmtNum(tok) + " tok" : "") + '</div>' +
-      '</div>'
-    );
-  }).join('');
-  el.innerHTML = '<div class="sa-lab">Sub-agents (' + children.length + ')</div>' + rows;
-  el.querySelectorAll(".subagent-row").forEach(r => {
-    r.onclick = () => selectAgent(r.dataset.id);
-  });
 }
 
 // ─── Embedded terminal ──────────────────────────
@@ -1093,45 +906,22 @@ cwdInput.addEventListener("input", () => {
   cwdCheckTimer = setTimeout(() => validateCwd(path), 300);
 });
 
-// Spawn modal: parentAgentID is set when the user opens the modal via the
-// terminal head's "+ Child" button. Cleared for the top-bar "+ New Agent".
-let modalParentAgentID = "";
-function openSpawnModal(parentAgent) {
-  modalParentAgentID = parentAgent ? parentAgent.id : "";
-  cwdInput.value = parentAgent && parentAgent.cwd ? parentAgent.cwd : "";
+document.getElementById("new-btn").onclick = () => {
+  cwdInput.value = "";
   document.getElementById("prompt-input").value = "";
   cwdHint.textContent = "";
   cwdHint.className = "cwd-hint";
-  document.getElementById("modal-title").textContent =
-    parentAgent ? "Spawn a child agent" : "Spawn a new agent";
-  const hint = document.getElementById("modal-parent-hint");
-  if (parentAgent) {
-    hint.textContent = "Parent: " + agentName(parentAgent) + " (" + parentAgent.id.slice(0, 8) + ")";
-    hint.style.display = "";
-  } else {
-    hint.style.display = "none";
-    hint.textContent = "";
-  }
   document.getElementById("modal").classList.add("show");
   cwdInput.focus();
-}
-document.getElementById("new-btn").onclick = () => openSpawnModal(null);
-document.getElementById("d-child").onclick = () => {
-  const parent = selectedId ? agents.get(selectedId) : null;
-  if (!parent) { toast.error("Select an agent to spawn a child of it"); return; }
-  openSpawnModal(parent);
 };
 document.getElementById("cancel-btn").onclick = () => document.getElementById("modal").classList.remove("show");
 document.getElementById("create-btn").onclick = async () => {
   const cwd = cwdInput.value.trim();
   const prompt = document.getElementById("prompt-input").value.trim();
   if (!cwd) { toast.error("cwd is required"); return; }
-  const body = { cwd, prompt };
-  if (modalParentAgentID) body.parentAgentID = modalParentAgentID;
-  const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({cwd, prompt}) });
   if (!res.ok) { toast.error("Spawn failed: " + await res.text()); return; }
   document.getElementById("modal").classList.remove("show");
-  modalParentAgentID = "";
 };
 
 // Return to dashboard: click the header logo.
