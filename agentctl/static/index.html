@@ -330,14 +330,45 @@
         <div class="hero-strip" id="dash-hero"></div>
 
         <div class="dash-main">
+          <!-- LEFT: embedded terminal panel for the selected agent -->
           <div class="dash-left">
-            <h3>Agents by activity</h3>
-            <div class="lb" id="dash-leaderboard"></div>
-
-            <h3>Live activity feed <span class="count" id="dash-feed-count">0</span></h3>
-            <div class="feed" id="dash-feed"></div>
+            <div class="term-panel">
+              <div class="empty" id="term-empty">
+                <div style="font-size:28px">🤖</div>
+                <div>Select an agent on the left to open its terminal here.</div>
+              </div>
+              <div id="term-head" class="term-head" style="display:none">
+                <div class="avatar"><img id="d-avatar" alt=""></div>
+                <div class="info">
+                  <div class="top">
+                    <span class="name" id="d-name"></span>
+                    <span id="d-status"></span>
+                  </div>
+                  <div class="cwd" id="d-cwd"></div>
+                  <div class="task" id="d-task"></div>
+                </div>
+                <div class="actions">
+                  <button id="d-kill" class="ghost">Kill</button>
+                </div>
+              </div>
+              <div class="term-approval" id="d-approval" style="display:none">
+                <div class="msg"><span class="lab">Awaiting</span><span id="d-approval-msg"></span></div>
+                <div class="btns">
+                  <button class="approve" id="d-approve">✓ Approve</button>
+                  <button class="deny" id="d-deny">✕ Deny</button>
+                </div>
+                <div class="raw-input">
+                  <input id="d-raw" placeholder="raw keys…" title="Send any key sequence: y, 2, \\r for Enter, \\x1b for Esc">
+                  <button id="d-raw-send">Send</button>
+                </div>
+              </div>
+              <div class="term-body" id="term-body" style="display:none">
+                <div id="term-container"></div>
+              </div>
+            </div>
           </div>
 
+          <!-- RIGHT: charts + tokens + bars + feed + tools (scrolls independently) -->
           <div class="dash-right">
             <h3>Trends <span class="count" id="dash-trend-window">last 10m</span></h3>
             <div class="chart-stack">
@@ -357,45 +388,12 @@
             <h3>Tokens by agent</h3>
             <div class="bars" id="dash-bars"></div>
 
+            <h3>Live activity feed <span class="count" id="dash-feed-count">0</span></h3>
+            <div class="feed" id="dash-feed"></div>
+
             <h3>Tool usage</h3>
             <div class="tool-agg" id="dash-tools"></div>
           </div>
-        </div>
-      </div>
-      <div id="detail-full" style="display:none; height: 100%; flex-direction: column;">
-        <div class="detail-head">
-          <div class="avatar"><img id="d-avatar" alt=""></div>
-          <div class="info">
-            <div class="top">
-              <span class="name" id="d-name"></span>
-              <span id="d-status"></span>
-            </div>
-            <div class="cwd" id="d-cwd"></div>
-            <div class="id" id="d-id"></div>
-          </div>
-          <div class="actions">
-            <button id="d-kill" class="ghost">Kill</button>
-          </div>
-        </div>
-
-        <div class="approval-bar" id="d-approval" style="display:none">
-          <div class="msg"><span class="lab">Awaiting decision</span><span id="d-approval-msg"></span></div>
-          <div class="btns">
-            <button class="approve" id="d-approve">✓ Approve</button>
-            <button class="deny" id="d-deny">✕ Deny</button>
-          </div>
-          <div class="raw-input">
-            <input id="d-raw" placeholder="raw keys…" title="Type any key sequence to send to the PTY, e.g. y, 2, \\r for Enter, \\x1b for Esc">
-            <button id="d-raw-send" title="Send raw keys to PTY">Send</button>
-          </div>
-        </div>
-
-        <div id="detail-body">
-          <div id="term-wrap">
-            <div id="term-container"></div>
-            <div id="term-hint">click terminal · type · Ctrl+C</div>
-          </div>
-          <div id="side-info"></div>
         </div>
       </div>
     </section>
@@ -593,21 +591,6 @@ function renderDashboard() {
       }).join('');
   if (feedSeen.size > 500) feedSeen = new Set(Array.from(feedSeen).slice(-300));
 
-  // Leaderboard (by tokens desc)
-  const lb = arr.slice().sort((a, b) => ((b.inputTokens || 0) + (b.outputTokens || 0)) - ((a.inputTokens || 0) + (a.outputTokens || 0)));
-  document.getElementById("dash-leaderboard").innerHTML = lb.length === 0
-    ? '<div style="padding:14px; color: var(--muted)">No agents yet.</div>'
-    : ('<div class="header"><div></div><div>Agent</div><div class="r">Status</div><div class="r">Tokens</div><div class="r">Updated</div></div>' +
-       lb.map(a => (
-         '<div class="row" data-id="' + a.id + '">' +
-           '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
-           '<div class="who"><div class="name">' + esc(agentName(a)) + '</div><div class="cwd">' + esc(cwdBase(a.cwd)) + '</div></div>' +
-           '<div class="stat-cell"><span class="status-pill ' + (a.status || "idle") + '"><span class="dot"></span>' + (a.status || "idle").replace("_", " ") + '</span></div>' +
-           '<div class="stat-cell"><strong>' + fmtNum((a.inputTokens || 0) + (a.outputTokens || 0)) + '</strong></div>' +
-           '<div class="stat-cell">' + humanAge(a.updatedAt) + ' ago</div>' +
-         '</div>'
-       )).join(''));
-
   // Tool usage aggregation
   const toolEntries = Object.entries(toolAgg).sort((a, b) => b[1] - a[1]);
   document.getElementById("dash-tools").innerHTML = toolEntries.length === 0
@@ -638,7 +621,7 @@ function renderDashboard() {
   document.getElementById("chart-tokens-val").textContent = fmtNum(trend.length ? trend[trend.length - 1].tokens : 0);
 
   // Wire click handlers.
-  document.querySelectorAll("#dash-leaderboard .row, #dash-bars .row").forEach(r => {
+  document.querySelectorAll("#dash-bars .row").forEach(r => {
     r.onclick = () => selectAgent(r.dataset.id);
   });
   document.querySelectorAll("#dash-feed .row").forEach(r => {
@@ -818,99 +801,54 @@ function reorderAgents(movedId, pivotId, before) {
   renderSidebar();
 }
 
-// ─── Detail pane ────────────────────────────────
+// ─── Selection + embedded terminal panel ───────
+// The dashboard always stays mounted. Selecting an agent just updates the
+// LEFT term-panel (header + optional approval bar + xterm), unselecting
+// (clicking the logo) shows the placeholder again.
 function selectAgent(id) {
   if (selectedId === id) return;
   selectedId = id;
   renderSidebar();
-  renderDetail(true);
+  renderTermPanel(true);
 }
 
-function renderDetail(mountTerminal) {
-  const a = agents.get(selectedId);
-  const dash = document.getElementById("dashboard");
-  const full = document.getElementById("detail-full");
+function renderTermPanel(mountTerminal) {
+  const a = selectedId ? agents.get(selectedId) : null;
+  const empty = document.getElementById("term-empty");
+  const head = document.getElementById("term-head");
+  const approval = document.getElementById("d-approval");
+  const body = document.getElementById("term-body");
   if (!a) {
-    dash.style.display = "block";
-    full.style.display = "none";
+    empty.style.display = "flex";
+    head.style.display = "none";
+    approval.style.display = "none";
+    body.style.display = "none";
     teardownTerminal();
-    renderDashboard();
     return;
   }
-  dash.style.display = "none";
-  full.style.display = "flex";
+  empty.style.display = "none";
+  head.style.display = "flex";
+  body.style.display = "block";
 
   document.getElementById("d-avatar").src = avatarURL(a.id);
   document.getElementById("d-name").textContent = agentName(a);
   document.getElementById("d-cwd").textContent = a.cwd;
-  document.getElementById("d-id").textContent = a.id;
   const status = a.status || "idle";
   document.getElementById("d-status").innerHTML = '<span class="status-pill ' + status + '"><span class="dot"></span>' + status.replace("_", " ") + '</span>';
+  const task = a.currentTask || a.prompt || "";
+  document.getElementById("d-task").textContent = task ? "▸ " + task : "";
 
-  // Approval bar
-  const approvalBar = document.getElementById("d-approval");
   if (a.pending) {
-    approvalBar.style.display = "flex";
+    approval.style.display = "flex";
     document.getElementById("d-approval-msg").textContent = a.pending.message || "Claude is waiting for your decision.";
   } else {
-    approvalBar.style.display = "none";
+    approval.style.display = "none";
   }
 
-  // Side info panel
-  renderSideInfo(a);
-
-  // Terminal: mount if switching agents, otherwise leave alone
   if (mountTerminal) mountTerminalFor(a.id);
-}
-
-function renderSideInfo(a) {
-  const tools = topTools(a.toolCounts, 20);
-  const toolsHTML = tools.length
-    ? '<div class="tool-list">' + tools.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('') + '</div>'
-    : '<div style="color:var(--muted);font-size:12px">no tool calls yet</div>';
-
-  const history = (a.taskHistory || []).slice().reverse();
-  const historyHTML = history.length
-    ? history.map((t, i) => '<div class="task-block ' + (i === 0 ? '' : 'dim') + '">' + esc(t) + '</div>').join('')
-    : '<div style="color:var(--muted);font-size:12px">no prompts recorded yet</div>';
-
-  const acts = (a.activity || []).slice().reverse();
-  const actHTML = acts.length
-    ? acts.map(e => {
-        const lvl = e.level || "info";
-        let msg = '<span class="ev">' + esc(e.event) + '</span>';
-        if (e.tool) msg += ' <span class="tool">' + esc(e.tool) + '</span>';
-        if (e.detail) msg += ' <span class="det">— ' + esc(e.detail) + '</span>';
-        return '<div class="ent"><div class="t">' + humanTime(e.t) + '</div><div class="msg ' + lvl + '">' + msg + '</div></div>';
-      }).join('')
-    : '<div style="color:var(--muted)">no events yet</div>';
-
-  document.getElementById("side-info").innerHTML = (
-    '<h4>Tokens</h4>' +
-    '<div class="token-grid">' +
-      '<div class="token-box"><div class="lab">Input</div><div class="val">' + fmtNum(a.inputTokens || 0) + '</div></div>' +
-      '<div class="token-box"><div class="lab">Output</div><div class="val">' + fmtNum(a.outputTokens || 0) + '</div></div>' +
-      '<div class="token-box"><div class="lab">Cache read</div><div class="val">' + fmtNum(a.cacheReadTokens || 0) + '</div></div>' +
-      '<div class="token-box"><div class="lab">Cache write</div><div class="val">' + fmtNum(a.cacheCreationTokens || 0) + '</div></div>' +
-    '</div>' +
-    '<div style="color:var(--muted); font-size: 10.5px; margin-top: 4px;">' + (a.messageCount || 0) + ' assistant messages · updated ' + humanAge(a.updatedAt) + ' ago</div>' +
-
-    '<h4>Current task</h4>' +
-    historyHTML +
-
-    '<h4>Tool usage</h4>' +
-    toolsHTML +
-
-    '<h4>Metadata</h4>' +
-    '<div class="kv">' +
-      '<div class="k">session</div><div class="v">' + esc(a.sessionId) + '</div>' +
-      '<div class="k">spawned</div><div class="v plain">' + humanAge(a.createdAt) + ' ago</div>' +
-      (a.transcriptPath ? '<div class="k">transcript</div><div class="v">' + esc(a.transcriptPath) + '</div>' : '') +
-    '</div>' +
-
-    '<h4>Activity</h4>' +
-    '<div class="activity">' + actHTML + '</div>'
-  );
+  // If we didn't remount, the terminal is still bound to the previous agent.
+  // Fit again in case the panel resized.
+  requestAnimationFrame(() => { try { if (fitAddon) fitAddon.fit(); } catch (_) {} });
 }
 
 // ─── Embedded terminal ──────────────────────────
@@ -1016,7 +954,8 @@ document.querySelector("header h1").onclick = () => {
   selectedId = null;
   teardownTerminal();
   renderSidebar();
-  renderDetail(false);
+  renderDashboard();
+  renderTermPanel(false);
 };
 
 // ─── Live updates ───────────────────────────────
@@ -1037,7 +976,8 @@ dashWS.onmessage = (ev) => {
   }
   renderStats();
   renderSidebar();
-  renderDetail(false);
+  renderDashboard();
+  renderTermPanel(false);
 };
 
 // Trend sampling every 5s (also drives dashboard re-render — sparklines need
@@ -1047,7 +987,8 @@ setInterval(() => {
   sampleTrend();
   renderStats();
   renderSidebar();
-  renderDetail(false);
+  renderDashboard();
+  renderTermPanel(false);
 }, 5000);
 
 // Initial render (dashboard view — no selection) plus a first sample so the
