@@ -1,6 +1,6 @@
 if (window.AGENTCTL_NO_TOKEN) { /* Auth screen is showing; skip app boot. */ } else {
 const agents = new Map();
-const sidebar = document.getElementById("sidebar");
+const sidebar = document.getElementById("sidebar-list");
 let selectedId = null;
 
 // Terminal state (single embedded terminal in the detail pane).
@@ -583,7 +583,7 @@ function sortedAgents() {
 function renderSidebar() {
   const arr = sortedAgents();
   if (arr.length === 0) {
-    sidebar.innerHTML = '<div class="empty-sidebar">No agents yet.<br>Click <strong>+ New Agent</strong> to spawn one.</div>';
+    sidebar.innerHTML = '<div class="empty-sidebar">No agents yet.<br>Click <strong>+ Add Agent</strong> above to spawn one.</div>';
     return;
   }
   sidebar.innerHTML = "";
@@ -1206,22 +1206,30 @@ function renderTeamCanvas() {
     const modelBadge = sf.model ? '<span class="badge model">' + esc(sf.model) + '</span>' : "";
     const scopeBadge = sf.scope ? '<span class="badge scope ' + esc(sf.scope) + '" title="' + (sf.scope === "user" ? "~/.claude/agents/ (shared across all your projects)" : "project-scoped .claude/agents/") + '">' + esc(sf.scope) + '</span>' : "";
     const indent = depth * 14 + 8;
+    const hasDesc = !!(sf.description || "").trim();
+    const chevron = hasDesc
+      ? '<button class="tree-chevron" data-act="expand" title="Show description">▸</button>'
+      : '<span class="tree-chevron" style="visibility:hidden">▸</span>';
     return (
       '<div class="tree-row' + (isLast ? " last" : "") + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="padding-left:' + indent + 'px;--d:' + depth + '">' +
-        '<div class="tree-info">' +
-          '<div class="tree-line1">' +
-            '<span class="name">' + esc(sf.name) + '</span>' +
-            (sf.description ? '<span class="desc">— ' + esc(sf.description) + '</span>' : '') +
-          '</div>' +
-        '</div>' +
+        chevron +
+        '<div class="tree-info"><span class="name">' + esc(sf.name) + '</span></div>' +
         '<div class="tree-badges">' + modelBadge + scopeBadge + '</div>' +
+        (hasDesc ? '<div class="tree-desc">' + esc(sf.description) + '</div>' : '') +
       '</div>'
     );
   }).join("") + '</div>';
 
   canvas.innerHTML = rootHTML + treeHTML;
   canvas.querySelectorAll(".tree-row[data-name]").forEach(r => {
-    r.onclick = () => openSubagentModal(r.dataset.name, r.dataset.scope);
+    r.onclick = (ev) => {
+      if (ev.target.closest("[data-act='expand']")) {
+        ev.stopPropagation();
+        r.classList.toggle("expanded");
+        return;
+      }
+      openSubagentModal(r.dataset.name, r.dataset.scope);
+    };
   });
 }
 

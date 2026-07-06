@@ -19,11 +19,15 @@
       <div class="stat pending-count" id="stat-pending-wrap" style="display:none"><span class="lab">Awaiting</span><span class="val" id="stat-pending">0</span></div>
     </div>
     <span class="spacer"></span>
-    <button class="primary" id="new-btn">+ New Agent</button>
   </header>
 
   <div id="main">
-    <aside id="sidebar"></aside>
+    <aside id="sidebar">
+      <button class="add-agent-suggest" id="new-btn" title="Spawn a new Claude Code session">
+        <span class="plus">+</span> Add Agent
+      </button>
+      <div id="sidebar-list"></div>
+    </aside>
     <section id="detail">
       <div id="dashboard">
         <h2>Overview</h2>
