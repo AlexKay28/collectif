@@ -1119,12 +1119,32 @@ function updateTeamVisibility() {
       teamCurrentSelection = a.id;
       refreshTeamForCurrent();
     }
+    startTeamPolling();
   } else {
     team.style.display = "none";
     metrics.style.display = "";
     teamCurrentSelection = null;
     teamSubagents = [];
+    stopTeamPolling();
   }
+}
+
+// Poll the team endpoint every 4s so external changes (e.g. `/agents` in
+// the parent claude, or an editor writing to .claude/agents/) show up
+// without the user hitting Refresh. Only runs while the panel is visible.
+let teamPollTimer = null;
+function startTeamPolling() {
+  if (teamPollTimer) return;
+  teamPollTimer = setInterval(() => {
+    if (!selectedId) { stopTeamPolling(); return; }
+    // Skip the poll while an edit modal is open — otherwise a mid-edit
+    // refresh could re-render the form under the user.
+    if (document.getElementById("sa-modal").classList.contains("show")) return;
+    refreshTeam();
+  }, 4000);
+}
+function stopTeamPolling() {
+  if (teamPollTimer) { clearInterval(teamPollTimer); teamPollTimer = null; }
 }
 async function refreshTeam() {
   if (!selectedId) return;
@@ -1291,7 +1311,7 @@ function closeSubagentModal() {
 }
 async function saveSubagent() {
   const name = document.getElementById("sa-name").value.trim();
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) {
     toast.error("Name must match a–z 0–9 - (max 64 chars)");
     return;
   }

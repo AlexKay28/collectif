@@ -29,26 +29,36 @@ type SubagentFile struct {
 	Scope       string   `json:"scope,omitempty" yaml:"-"`
 }
 
-var subagentNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+// Names Claude Code shows in /agents include uppercase (e.g. PM, MDEV-ios,
+// SDEV), so accept mixed case and underscore in addition to the safe subset.
+var subagentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
-// agentsDir returns the resolved absolute path to <cwd>/.claude/agents and
-// verifies it is contained within the session's cwd (defensive against
-// symlink escapes). Does not require the directory to exist.
-func agentsDir(cwd string) (string, error) {
+// projectAgentsDir walks up from cwd looking for the first `.claude/agents`
+// directory that already exists — this mirrors what Claude Code does when
+// resolving the "project agents" location. If nothing is found anywhere up
+// the tree, fall back to <cwd>/.claude/agents (where a first write would
+// naturally land).
+func projectAgentsDir(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", err
 	}
-	realCwd, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		realCwd = abs
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
-	dir := filepath.Join(realCwd, ".claude", "agents")
-	rel, err := filepath.Rel(realCwd, dir)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("agents dir escapes cwd")
+	dir := abs
+	for {
+		cand := filepath.Join(dir, ".claude", "agents")
+		if info, err := os.Stat(cand); err == nil && info.IsDir() {
+			return cand, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-	return dir, nil
+	return filepath.Join(abs, ".claude", "agents"), nil
 }
 
 // userAgentsDir returns ~/.claude/agents (may not exist). Returns empty
@@ -75,7 +85,7 @@ func subagentPath(cwd, name, scope string) (string, error) {
 		}
 		return filepath.Join(dir, name+".md"), nil
 	}
-	dir, err := agentsDir(cwd)
+	dir, err := projectAgentsDir(cwd)
 	if err != nil {
 		return "", err
 	}
@@ -141,7 +151,7 @@ func listSubagentsFor(cwd string) ([]*SubagentFile, error) {
 			byName[sf.Name] = sf
 		}
 	}
-	if dir, err := agentsDir(cwd); err == nil {
+	if dir, err := projectAgentsDir(cwd); err == nil {
 		for _, sf := range readAgentsDir(dir) {
 			sf.Scope = "project"
 			byName[sf.Name] = sf
