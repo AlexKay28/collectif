@@ -21,8 +21,8 @@ var staticFS embed.FS
 var authToken string
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "spawn" {
-		runSpawnClient(os.Args[2:])
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		runCLI(os.Args[1:])
 		return
 	}
 	setupLogging()
