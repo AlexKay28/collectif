@@ -90,10 +90,14 @@ func randomToken(n int) string {
 
 // withAuth gates every request except /api/hooks on the shared-secret token.
 // /api/hooks is authenticated separately by its per-session ?ht= UUID so a
-// leaked shared secret cannot forge hook events.
+// leaked shared secret cannot forge hook events. Static assets (HTML, CSS,
+// JS) are public — they contain no secrets and browsers can't attach the
+// token to <link>/<script> subresource requests. The token gate matters on
+// /api/* and /ws/*, which is where real data lives.
 func withAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/hooks" {
+		p := r.URL.Path
+		if p == "/api/hooks" || !isProtectedPath(p) {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -103,6 +107,10 @@ func withAuth(h http.Handler) http.Handler {
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+func isProtectedPath(p string) bool {
+	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws/")
 }
 
 func checkToken(r *http.Request) bool {
