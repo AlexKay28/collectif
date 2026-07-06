@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -173,7 +174,11 @@ func (s *Session) snapshotRing() []byte {
 	tail := s.ringHead
 	copy(out, s.ring[tail:])
 	copy(out[ringSize-tail:], s.ring[:tail])
-	return out
+	i := bytes.IndexByte(out, '\n')
+	if i < 0 {
+		return nil
+	}
+	return out[i+1:]
 }
 
 func (s *Session) addSub(c *websocket.Conn) {
