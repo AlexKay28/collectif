@@ -5,10 +5,43 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/creack/pty"
 )
+
+// prependPATH puts dir at the front of PATH in env. Idempotent — if PATH
+// already begins with dir, env is returned unchanged.
+func prependPATH(env []string, dir string) []string {
+	for i, e := range env {
+		if !strings.HasPrefix(e, "PATH=") {
+			continue
+		}
+		cur := strings.TrimPrefix(e, "PATH=")
+		if strings.HasPrefix(cur, dir+":") || cur == dir {
+			return env
+		}
+		env[i] = "PATH=" + dir + ":" + cur
+		return env
+	}
+	return append(env, "PATH="+dir)
+}
+
+// collectifBinDir returns the directory containing the running collectif
+// binary, so spawned children can find `collectif` on their PATH. Determined
+// once at startup.
+var collectifBinDir = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe)
+}()
 
 // spawnClaude launches `claude` in a PTY under s.Cwd, pinned to s.SessionID.
 // PTY output is teed into the ring buffer and broadcast to WS subscribers.
@@ -20,13 +53,18 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = s.Cwd
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"TERM=xterm-256color",
 		"AGENTCTL_AGENT_ID="+s.ID,
 		"COLLECTIF_AGENT_ID="+s.ID,
+		"COLLECTIF_PARENT_ID="+s.ParentID,
 		"COLLECTIF_TOKEN="+authToken,
 		"COLLECTIF_URL=http://"+hookBind+":"+hookPort,
 	)
+	if collectifBinDir != "" {
+		env = prependPATH(env, collectifBinDir)
+	}
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	ptmx, err := pty.Start(cmd)

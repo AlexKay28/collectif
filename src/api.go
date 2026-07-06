@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -119,6 +120,8 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			handleAgentAnswer(w, r, s, []string{"no\r"}, []string{"\x1b"})
 		case "resize":
 			handleAgentResize(w, r, s)
+		case "output":
+			handleAgentOutput(w, r, s)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}
@@ -269,6 +272,33 @@ func handleCwdCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
+}
+
+// handleAgentOutput returns the tail of the agent's PTY ring buffer as plain
+// text with ANSI escape sequences stripped. Used by `collectif tail` so the
+// parent can inspect a child's terminal without the WebSocket noise.
+func handleAgentOutput(w http.ResponseWriter, r *http.Request, s *Session) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	bytesParam := r.URL.Query().Get("bytes")
+	n := 8192
+	if bytesParam != "" {
+		if parsed, err := strconv.Atoi(bytesParam); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+	if n > 1<<20 {
+		n = 1 << 20
+	}
+	raw := s.snapshotRing()
+	clean := stripAnsi(string(raw))
+	if len(clean) > n {
+		clean = clean[len(clean)-n:]
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(clean))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
