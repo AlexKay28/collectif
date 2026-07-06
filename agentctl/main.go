@@ -12,6 +12,7 @@ import (
 var staticFS embed.FS
 
 func main() {
+	setupLogging()
 	port := flag.String("port", "7317", "TCP port to bind on 127.0.0.1")
 	bind := flag.String("bind", "127.0.0.1", "bind address")
 	flag.Parse()
