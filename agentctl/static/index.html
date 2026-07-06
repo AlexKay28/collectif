@@ -1,0 +1,1061 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>agentctl</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2128;
+    --border: #30363d;
+    --border-hi: #6e7681;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #58a6ff;
+    --running: #3fb950;
+    --waiting: #d29922;
+    --idle: #8b949e;
+    --error: #f85149;
+    --stopped: #484f58;
+    --approve: #238636;
+    --deny: #da3633;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; overflow: hidden; }
+  #app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* ─── Header ────────────────────────────────────── */
+  header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 14px; align-items: center; background: var(--panel); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  header .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; display: flex; gap: 6px; align-items: center; font-size: 11.5px; }
+  .stat .lab { color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+  .stat .val { font-weight: 600; }
+  .stat.act .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--running); animation: pulse 1.4s ease-in-out infinite; }
+  .stat.wait .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--waiting); animation: pulse 1s ease-in-out infinite; }
+  header .spacer { flex: 1; }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; transition: border-color 0.1s, background 0.1s; }
+  button:hover:not(:disabled) { border-color: var(--border-hi); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { background: #238636; border-color: #2ea043; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #2ea043; }
+  button.approve { background: var(--approve); border-color: #2ea043; color: #fff; font-weight: 600; }
+  button.approve:hover:not(:disabled) { background: #2ea043; }
+  button.deny { background: var(--deny); border-color: #f85149; color: #fff; font-weight: 600; }
+  button.deny:hover:not(:disabled) { background: #f85149; }
+  button.ghost { color: #ff7b72; }
+  button.ghost:hover:not(:disabled) { border-color: var(--error); }
+
+  /* ─── Layout ────────────────────────────────────── */
+  #main { display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
+  #sidebar { border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel); }
+  #detail { overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+
+  /* ─── Sidebar ───────────────────────────────────── */
+  .agent-card { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; position: relative; transition: background 0.08s; }
+  .agent-card:hover { background: var(--panel-2); }
+  .agent-card.selected { background: var(--panel-2); }
+  .agent-card.selected::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+  .agent-card.pending { box-shadow: inset 3px 0 0 var(--waiting); animation: pulse-bg 1.6s ease-in-out infinite; }
+  @keyframes pulse-bg { 0%, 100% { background: var(--panel); } 50% { background: rgba(210, 153, 34, 0.08); } }
+  .agent-card.pending.selected { background: rgba(210, 153, 34, 0.12); }
+
+  .card-head { display: flex; gap: 10px; align-items: flex-start; }
+  .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--panel-2); border: 2px solid var(--border); flex: 0 0 auto; overflow: hidden; }
+  .avatar img { width: 100%; height: 100%; display: block; }
+  .card-body { flex: 1; min-width: 0; }
+  .card-name { display: flex; gap: 6px; align-items: center; }
+  .card-name .name { font-weight: 600; font-size: 13px; }
+  .card-name .age { color: var(--muted); font-size: 10.5px; margin-left: auto; }
+  .card-cwd { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+  .card-status-row { margin-top: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .card-activity { color: var(--muted); font-size: 11px; margin-top: 4px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-token { color: var(--muted); font-size: 10.5px; margin-top: 3px; font-family: ui-monospace, monospace; }
+  .pending-badge { background: var(--waiting); color: #000; font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .status-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-weight: 600; }
+  .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .status-pill.running .dot   { background: var(--running); animation: pulse 1.4s ease-in-out infinite; }
+  .status-pill.waiting_input .dot { background: var(--waiting); animation: pulse 0.9s ease-in-out infinite; }
+  .status-pill.idle .dot      { background: var(--idle); }
+  .status-pill.error .dot     { background: var(--error); }
+  .status-pill.stopped .dot   { background: var(--stopped); }
+  .status-pill.starting .dot  { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .status-pill.running   { color: var(--running); }
+  .status-pill.waiting_input { color: var(--waiting); }
+  .status-pill.error     { color: var(--error); }
+  .status-pill.stopped   { color: var(--stopped); }
+  .status-pill.starting  { color: var(--accent); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ─── Detail pane ─────────────────────────────── */
+  .detail-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted); flex-direction: column; gap: 8px; }
+  .detail-head { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 14px; align-items: center; background: var(--panel); }
+  .detail-head .avatar { width: 46px; height: 46px; }
+  .detail-head .info { flex: 1; min-width: 0; }
+  .detail-head .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .detail-head .top .name { font-weight: 700; font-size: 15px; }
+  .detail-head .cwd { color: var(--muted); font-size: 11.5px; font-family: ui-monospace, monospace; margin-top: 2px; }
+  .detail-head .id { color: var(--muted); font-size: 10.5px; font-family: ui-monospace, monospace; }
+  .detail-head .actions { display: flex; gap: 6px; }
+
+  .approval-bar { background: rgba(210, 153, 34, 0.12); border-bottom: 1px solid var(--waiting); padding: 12px 20px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .approval-bar .msg { flex: 1; min-width: 200px; font-size: 13px; }
+  .approval-bar .msg .lab { color: var(--waiting); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 8px; }
+  .approval-bar .btns { display: flex; gap: 8px; }
+
+  #detail-body { flex: 1; display: grid; grid-template-columns: 1fr 320px; min-height: 0; overflow: hidden; }
+  #term-wrap { padding: 8px 8px 8px 16px; min-width: 0; overflow: hidden; background: #000; border-right: 1px solid var(--border); position: relative; }
+  #term-container { height: 100%; }
+  #term-container .xterm { height: 100%; }
+  #term-hint { position: absolute; bottom: 8px; right: 12px; color: var(--muted); font-size: 10.5px; font-family: ui-monospace, monospace; pointer-events: none; opacity: 0.6; }
+
+  #side-info { overflow-y: auto; padding: 14px 16px; background: var(--panel); }
+  #side-info h4 { margin: 14px 0 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  #side-info h4:first-child { margin-top: 0; }
+  #side-info .kv { display: grid; grid-template-columns: 74px 1fr; gap: 4px 10px; font-size: 12px; }
+  #side-info .kv .k { color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; padding-top: 2px; }
+  #side-info .kv .v { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+  #side-info .kv .v.plain { font-family: inherit; font-size: 12px; }
+  #side-info .task-block { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 4px; word-break: break-word; }
+  #side-info .task-block.dim { opacity: 0.55; font-size: 11px; }
+  #side-info .tool-list { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chip { font-family: ui-monospace, monospace; font-size: 10.5px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--muted); }
+  .chip strong { color: var(--text); margin-left: 3px; }
+  .token-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .token-box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  .token-box .lab { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .token-box .val { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; margin-top: 2px; }
+  #side-info .activity { font-family: ui-monospace, monospace; font-size: 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 220px; overflow-y: auto; }
+  #side-info .activity .ent { display: grid; grid-template-columns: 54px 1fr; gap: 6px; padding: 1px 0; }
+  #side-info .activity .t { color: var(--muted); font-size: 10px; padding-top: 1px; }
+  #side-info .activity .msg { min-width: 0; word-break: break-word; }
+  #side-info .activity .msg .ev { font-weight: 600; }
+  #side-info .activity .msg.error .ev { color: var(--error); }
+  #side-info .activity .msg.warn .ev { color: var(--waiting); }
+  #side-info .activity .msg .tool { color: var(--accent); }
+  #side-info .activity .msg .det { color: var(--muted); }
+
+  /* ─── Modal ─────────────────────────────────────── */
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 30; }
+  #modal.show { display: flex; }
+  #modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 480px; max-width: 90vw; }
+  #modal h3 { margin: 0 0 4px; font-size: 14px; }
+  #modal label { display: block; margin-top: 14px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  #modal input { width: 100%; margin-top: 6px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: inherit; }
+  #modal input:focus { outline: none; border-color: var(--accent); }
+  #modal .actions { margin-top: 20px; display: flex; gap: 8px; justify-content: flex-end; }
+
+  .empty-sidebar { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 12px; }
+
+  /* ─── Dashboard view (default landing) ───────── */
+  /* Full-height flex column; hero+subtitle at top, .dash-main fills the rest.
+     .dash-right scrolls internally so the terminal on the LEFT stays visible. */
+  #dashboard { padding: 16px 20px 0; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+  #dashboard h2 { margin: 0 0 2px; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+  #dashboard .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  #dashboard h3 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  #dashboard h3 .count { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; font-size: 10.5px; color: var(--text); letter-spacing: 0; text-transform: none; font-weight: 600; }
+  #dashboard h3:first-child { margin-top: 0; }
+
+  /* ─── Embedded terminal panel on the LEFT ────── */
+  .term-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .term-panel .empty { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--muted); font-size: 13px; }
+  .term-head { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; background: var(--panel-2); flex: 0 0 auto; }
+  .term-head .avatar { width: 36px; height: 36px; }
+  .term-head .info { flex: 1; min-width: 0; }
+  .term-head .info .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .term-head .info .top .name { font-weight: 700; font-size: 13px; }
+  .term-head .info .cwd { color: var(--muted); font-size: 10.5px; font-family: ui-monospace, monospace; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-head .info .task { color: var(--text); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-head .actions { display: flex; gap: 6px; }
+  .term-approval { background: rgba(210, 153, 34, 0.12); border-bottom: 1px solid var(--waiting); padding: 8px 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
+  .term-approval .msg { flex: 1; min-width: 160px; font-size: 12px; }
+  .term-approval .msg .lab { color: var(--waiting); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 6px; }
+  .term-approval .btns { display: flex; gap: 6px; }
+  .term-approval .raw-input { display: flex; gap: 4px; }
+  .term-approval .raw-input input { padding: 3px 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: inherit; width: 110px; font-family: ui-monospace, monospace; font-size: 11px; }
+  .term-approval .raw-input input:focus { outline: none; border-color: var(--accent); }
+  .term-approval button { padding: 3px 10px; font-size: 11.5px; }
+  .term-body { flex: 1; min-height: 0; background: #000; padding: 6px; }
+  .term-body #term-container { height: 100%; }
+  .term-body #term-container .xterm { height: 100%; }
+
+  /* Compact horizontal stat strip (replaces the big hero grid) */
+  .hero-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+  .hero { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; display: inline-flex; align-items: baseline; gap: 8px; }
+  .hero .lab { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .hero .val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hero .sub { color: var(--muted); font-size: 10.5px; }
+  .hero.accent .val { color: var(--running); }
+  .hero.wait   .val { color: var(--waiting); }
+  .hero.err    .val { color: var(--error); }
+
+  .token-hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+  .tok { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; }
+  .tok .lab { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .tok .val { font-size: 15px; font-weight: 700; font-family: ui-monospace, monospace; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tok .sub { color: var(--muted); font-size: 9.5px; margin-top: 1px; }
+  .tok.cost .val { color: var(--accent); }
+
+  .pending-panel { background: rgba(210, 153, 34, 0.10); border: 1px solid var(--waiting); border-radius: 10px; padding: 14px; margin-bottom: 6px; }
+  .pending-item { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; }
+  .pending-item + .pending-item { border-top: 1px solid rgba(210, 153, 34, 0.25); margin-top: 2px; }
+  .pending-item .avatar { width: 36px; height: 36px; flex: 0 0 auto; }
+  .pending-item .info { flex: 1; min-width: 0; }
+  .pending-item .info .who { font-weight: 600; font-size: 13px; }
+  .pending-item .info .msg { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+  .pending-item .btns { display: flex; gap: 6px; }
+  .pending-item button { padding: 6px 12px; font-size: 12px; }
+
+  .feed { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; max-height: 340px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .feed .row { display: grid; grid-template-columns: 62px 130px 1fr; gap: 12px; padding: 5px 14px; border-bottom: 1px solid var(--border); }
+  .feed .row:last-child { border-bottom: none; }
+  .feed .row .t { color: var(--muted); font-size: 10.5px; padding-top: 1px; }
+  .feed .row .who { color: var(--text); display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .feed .row .who .avatar { width: 18px; height: 18px; border-width: 1px; flex: 0 0 auto; }
+  .feed .row .who .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 11.5px; }
+  .feed .row .what { min-width: 0; word-break: break-word; }
+  .feed .row .what .ev { font-weight: 600; }
+  .feed .row .what.error .ev { color: var(--error); }
+  .feed .row .what.warn .ev { color: var(--waiting); }
+  .feed .row .what .tool { color: var(--accent); }
+  .feed .row .what .det { color: var(--muted); }
+  .feed .row.new { animation: flash 0.9s ease-out; }
+  @keyframes flash { 0% { background: rgba(88, 166, 255, 0.14); } 100% { background: transparent; } }
+
+  .lb { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .lb .row { display: grid; grid-template-columns: 32px 1fr 90px 100px 90px; gap: 12px; padding: 10px 14px; align-items: center; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .lb .row:last-child { border-bottom: none; }
+  .lb .row:hover { background: var(--panel-2); }
+  .lb .row .avatar { width: 28px; height: 28px; border-width: 1px; }
+  .lb .row .who { min-width: 0; }
+  .lb .row .who .name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb .row .who .cwd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb .row .stat-cell { font-family: ui-monospace, monospace; font-size: 11.5px; text-align: right; color: var(--muted); }
+  .lb .row .stat-cell strong { color: var(--text); }
+  .lb .header { display: grid; grid-template-columns: 32px 1fr 90px 100px 90px; gap: 12px; padding: 6px 14px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: var(--panel-2); border-bottom: 1px solid var(--border); font-weight: 600; }
+  .lb .header .r { text-align: right; }
+
+  /* Main dashboard split:
+       LEFT  = embedded terminal (fills available height)
+       RIGHT = charts + tokens + bars + feed + tools (scrolls independently) */
+  .dash-main { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; flex: 1 1 0; min-height: 0; padding-bottom: 16px; }
+  @media (max-width: 1100px) { .dash-main { grid-template-columns: 1fr; } }
+  .dash-left { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .dash-right { overflow-y: auto; padding-right: 4px; min-width: 0; }
+  .dash-right > h3:first-child { margin-top: 0; }
+
+  .tool-agg { display: flex; flex-wrap: wrap; gap: 4px; }
+
+  header h1 { cursor: pointer; user-select: none; }
+  header h1:hover { color: var(--accent); }
+
+  /* ─── Feed inline approve buttons ─────────────── */
+  .feed .row.approvable { grid-template-columns: 62px 130px 1fr auto; align-items: center; }
+  .feed .row .btns-inline { display: flex; gap: 4px; }
+  .feed .row .btns-inline button { padding: 3px 8px; font-size: 11px; font-family: -apple-system, sans-serif; }
+
+  /* ─── Sidebar card: drag + kill button ────────── */
+  .agent-card { padding-right: 30px; }
+  .agent-card .kill-btn {
+    position: absolute; top: 8px; right: 8px;
+    width: 20px; height: 20px; padding: 0;
+    border-radius: 4px; background: transparent; border: 1px solid transparent;
+    color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1;
+    opacity: 0; transition: opacity 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .agent-card:hover .kill-btn { opacity: 1; }
+  .agent-card .kill-btn:hover { color: var(--error); border-color: var(--error); }
+  .agent-card.dragging { opacity: 0.4; }
+  .agent-card.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+  .agent-card.drop-after  { box-shadow: inset 0 -3px 0 var(--accent); }
+  .agent-card { cursor: grab; }
+  .agent-card:active { cursor: grabbing; }
+
+  /* ─── Charts ──────────────────────────────────── */
+  .chart-stack { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .chart-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .chart-card .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .chart-card .head .lab { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .chart-card .head .val { font-size: 15px; font-weight: 700; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .chart-card svg { display: block; width: 100%; height: 64px; }
+  .chart-card svg .area { opacity: 0.25; }
+  .chart-card svg .line { fill: none; stroke-width: 1.6; }
+  .chart-card.tokens svg .line { stroke: var(--accent); }
+  .chart-card.tokens svg .area { fill: var(--accent); }
+  .chart-card.active svg .line { stroke: var(--running); }
+  .chart-card.active svg .area { fill: var(--running); }
+  .chart-card svg .axis { fill: var(--muted); font-size: 9px; font-family: ui-monospace, monospace; }
+
+  .bars { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+  .bars .row { display: grid; grid-template-columns: 22px 1fr 70px; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+  .bars .row:hover .track { border-color: var(--border-hi); }
+  .bars .row .avatar { width: 18px; height: 18px; border-width: 1px; }
+  .bars .row .track { background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; height: 14px; overflow: hidden; position: relative; }
+  .bars .row .fill { height: 100%; background: linear-gradient(90deg, var(--accent), #79c0ff); border-radius: 4px 0 0 4px; transition: width 0.4s ease-out; }
+  .bars .row .lbl { position: absolute; left: 6px; top: 0; bottom: 0; display: flex; align-items: center; font-size: 10px; color: #000; font-weight: 700; text-shadow: 0 0 2px rgba(255,255,255,0.4); }
+  .bars .row .num { text-align: right; font-family: ui-monospace, monospace; font-size: 11px; }
+
+  /* ─── Raw-keys input in detail approval bar ──── */
+  .approval-bar .raw-input { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+  .approval-bar .raw-input input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: inherit; width: 120px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .approval-bar .raw-input input:focus { outline: none; border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>agentctl</h1>
+    <div class="stats">
+      <div class="stat"><span class="lab">Agents</span><span class="val" id="stat-total">0</span></div>
+      <div class="stat act"><span class="dot"></span><span class="lab">Active</span><span class="val" id="stat-active">0</span></div>
+      <div class="stat wait"><span class="dot"></span><span class="lab">Waiting</span><span class="val" id="stat-waiting">0</span></div>
+      <div class="stat"><span class="lab">Tokens</span><span class="val mono" id="stat-tok">0</span></div>
+    </div>
+    <span class="spacer"></span>
+    <button class="primary" id="new-btn">+ New Agent</button>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar"></aside>
+    <section id="detail">
+      <div id="dashboard">
+        <h2>Overview</h2>
+        <div class="subtitle" id="dash-subtitle">Live activity across all agents.</div>
+
+        <div class="hero-strip" id="dash-hero"></div>
+
+        <div class="dash-main">
+          <div class="dash-left">
+            <h3>Agents by activity</h3>
+            <div class="lb" id="dash-leaderboard"></div>
+
+            <h3>Live activity feed <span class="count" id="dash-feed-count">0</span></h3>
+            <div class="feed" id="dash-feed"></div>
+          </div>
+
+          <div class="dash-right">
+            <h3>Trends <span class="count" id="dash-trend-window">last 10m</span></h3>
+            <div class="chart-stack">
+              <div class="chart-card active">
+                <div class="head"><span class="lab">Active agents</span><span class="val" id="chart-active-val">0</span></div>
+                <svg id="chart-active" viewBox="0 0 300 64" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="chart-card tokens">
+                <div class="head"><span class="lab">Total tokens</span><span class="val" id="chart-tokens-val">0</span></div>
+                <svg id="chart-tokens" viewBox="0 0 300 64" preserveAspectRatio="none"></svg>
+              </div>
+            </div>
+
+            <h3>Token consumption</h3>
+            <div class="token-hero" id="dash-tokens"></div>
+
+            <h3>Tokens by agent</h3>
+            <div class="bars" id="dash-bars"></div>
+
+            <h3>Tool usage</h3>
+            <div class="tool-agg" id="dash-tools"></div>
+          </div>
+        </div>
+      </div>
+      <div id="detail-full" style="display:none; height: 100%; flex-direction: column;">
+        <div class="detail-head">
+          <div class="avatar"><img id="d-avatar" alt=""></div>
+          <div class="info">
+            <div class="top">
+              <span class="name" id="d-name"></span>
+              <span id="d-status"></span>
+            </div>
+            <div class="cwd" id="d-cwd"></div>
+            <div class="id" id="d-id"></div>
+          </div>
+          <div class="actions">
+            <button id="d-kill" class="ghost">Kill</button>
+          </div>
+        </div>
+
+        <div class="approval-bar" id="d-approval" style="display:none">
+          <div class="msg"><span class="lab">Awaiting decision</span><span id="d-approval-msg"></span></div>
+          <div class="btns">
+            <button class="approve" id="d-approve">✓ Approve</button>
+            <button class="deny" id="d-deny">✕ Deny</button>
+          </div>
+          <div class="raw-input">
+            <input id="d-raw" placeholder="raw keys…" title="Type any key sequence to send to the PTY, e.g. y, 2, \\r for Enter, \\x1b for Esc">
+            <button id="d-raw-send" title="Send raw keys to PTY">Send</button>
+          </div>
+        </div>
+
+        <div id="detail-body">
+          <div id="term-wrap">
+            <div id="term-container"></div>
+            <div id="term-hint">click terminal · type · Ctrl+C</div>
+          </div>
+          <div id="side-info"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div id="modal">
+  <div class="box">
+    <h3>Spawn a new agent</h3>
+    <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">A new Claude Code session will start in a PTY on this server.</div>
+    <label>Working directory (absolute path)
+      <input id="cwd-input" placeholder="/home/you/project" />
+    </label>
+    <label>Initial prompt (optional)
+      <input id="prompt-input" placeholder="e.g. add a health-check endpoint" />
+    </label>
+    <div class="actions">
+      <button id="cancel-btn">Cancel</button>
+      <button class="primary" id="create-btn">Spawn</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+const agents = new Map();
+const sidebar = document.getElementById("sidebar");
+let selectedId = null;
+
+// Terminal state (single embedded terminal in the detail pane).
+let term = null, termWS = null, fitAddon = null, termAgentId = null;
+
+// ─── Helpers ────────────────────────────────────
+function avatarURL(id) {
+  return "https://api.dicebear.com/9.x/personas/svg?seed=" + encodeURIComponent(id) + "&backgroundColor=1c2128,161b22,30363d";
+}
+function agentName(a) {
+  const adj = ["swift","calm","brave","quick","clever","stoic","zesty","spry","keen","bright","daring","fierce","wise","bold","mellow","nimble","glad","lively","dandy","witty"];
+  const nouns = ["otter","hawk","fox","badger","robin","lynx","heron","panda","goose","stag","koala","raven","sable","tapir","sparrow","yak","ibex","marmot","gecko","newt"];
+  let h = 0;
+  for (let i = 0; i < a.id.length; i++) h = (h * 31 + a.id.charCodeAt(i)) >>> 0;
+  return adj[h % adj.length] + "-" + nouns[(h >> 8) % nouns.length];
+}
+function humanAge(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+}
+function humanTime(iso) {
+  if (!iso) return "";
+  return new Date(iso).toTimeString().slice(0, 8);
+}
+function cwdBase(cwd) {
+  if (!cwd) return "";
+  const p = cwd.replace(/\/+$/, "").split("/");
+  return p[p.length - 1] || cwd;
+}
+function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function fmtNum(n) { return (n || 0).toLocaleString(); }
+function topTools(counts, n) {
+  return Object.entries(counts || {}).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+// ─── Header stats ───────────────────────────────
+function renderStats() {
+  const arr = Array.from(agents.values());
+  let active = 0, waiting = 0;
+  let tokIn = 0, tokOut = 0;
+  for (const a of arr) {
+    if (a.status === "running") active++;
+    else if (a.status === "waiting_input") waiting++;
+    tokIn += a.inputTokens || 0;
+    tokOut += a.outputTokens || 0;
+  }
+  document.getElementById("stat-total").textContent = arr.length;
+  document.getElementById("stat-active").textContent = active;
+  document.getElementById("stat-waiting").textContent = waiting;
+  document.getElementById("stat-tok").textContent = fmtNum(tokIn + tokOut);
+}
+
+// ─── Cost estimate (rough Sonnet 4.6 pricing) ───
+// Input $3/M · Output $15/M · Cache read $0.30/M · Cache write $3.75/M
+function estimateCost(a) {
+  return ((a.inputTokens || 0) * 3
+        + (a.outputTokens || 0) * 15
+        + (a.cacheReadTokens || 0) * 0.30
+        + (a.cacheCreationTokens || 0) * 3.75) / 1_000_000;
+}
+function fmtCost(usd) {
+  if (usd < 0.01) return "$" + usd.toFixed(4);
+  if (usd < 1) return "$" + usd.toFixed(3);
+  return "$" + usd.toFixed(2);
+}
+
+// ─── Dashboard (default landing view) ───────────
+// Rolling feed of recent hook events across all agents. Backend already
+// pushes activity as part of each agent snapshot; we dedupe by (id, t, event).
+let feedSeen = new Set();      // "agentId|t|event|tool" fingerprints
+let feedFlashIds = new Set();  // fingerprints added this render (for animation)
+
+function renderDashboard() {
+  const arr = Array.from(agents.values());
+  const now = Date.now();
+
+  // Hero: totals + who's "active" (touched in last 30s).
+  let active = 0, waiting = 0, idle = 0, err = 0, stopped = 0;
+  let recentlyActive = 0;
+  let totalIn = 0, totalOut = 0, totalCR = 0, totalCC = 0, totalMsgs = 0;
+  const pending = [];
+  const toolAgg = {};
+  for (const a of arr) {
+    if (a.status === "running") active++;
+    else if (a.status === "waiting_input") waiting++;
+    else if (a.status === "idle") idle++;
+    else if (a.status === "error") err++;
+    else if (a.status === "stopped") stopped++;
+    const upd = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    if (upd && (now - upd) < 30_000) recentlyActive++;
+    totalIn += a.inputTokens || 0;
+    totalOut += a.outputTokens || 0;
+    totalCR += a.cacheReadTokens || 0;
+    totalCC += a.cacheCreationTokens || 0;
+    totalMsgs += a.messageCount || 0;
+    if (a.pending) pending.push(a);
+    for (const [t, c] of Object.entries(a.toolCounts || {})) toolAgg[t] = (toolAgg[t] || 0) + c;
+  }
+  const totalCost = arr.reduce((s, a) => s + estimateCost(a), 0);
+
+  document.getElementById("dash-subtitle").textContent =
+    arr.length === 0
+      ? "No agents yet. Spawn one with + New Agent."
+      : arr.length + " agent" + (arr.length === 1 ? "" : "s") + " · " + recentlyActive + " touched in last 30s · " + totalMsgs + " assistant messages so far";
+
+  // Hero tiles
+  document.getElementById("dash-hero").innerHTML = (
+    tileHero("Agents", arr.length, arr.length === 0 ? "" : "living sessions", "🧑‍💻") +
+    tileHero("Active now", active, active === recentlyActive ? "working" : recentlyActive + " touched < 30s", "⚡", "accent") +
+    tileHero("Waiting for you", waiting, waiting > 0 ? "needs a decision" : "no prompts", "⏳", waiting > 0 ? "wait" : "") +
+    tileHero("Silent", idle + stopped, idle + " idle · " + stopped + " stopped", "🌙") +
+    (err > 0 ? tileHero("Errors", err, "recent failures", "🔥", "err") : "")
+  );
+
+  // Tokens hero
+  document.getElementById("dash-tokens").innerHTML = (
+    tileTok("Input", totalIn, "prompt tokens") +
+    tileTok("Output", totalOut, "generated tokens") +
+    tileTok("Cache read", totalCR, "cache hits") +
+    tileTok("Cache write", totalCC, "cache created") +
+    tileTokCost("Estimated cost", fmtCost(totalCost), "Sonnet 4.6 rates (approx)")
+  );
+
+  // Live feed (merged across all agents' activity arrays). PermissionPrompt
+  // events for agents whose approval is still pending get inline buttons —
+  // that way the user can approve/deny straight from the feed row where the
+  // event appeared, no separate panel needed.
+  const events = [];
+  for (const a of arr) {
+    for (const e of (a.activity || [])) {
+      events.push({ ...e, agent: a });
+    }
+  }
+  events.sort((a, b) => (b.t || "").localeCompare(a.t || ""));
+  const shown = events.slice(0, 60);
+  document.getElementById("dash-feed-count").textContent = events.length;
+  document.getElementById("dash-feed").innerHTML = shown.length === 0
+    ? '<div style="padding:14px; color: var(--muted); font-family: -apple-system, sans-serif">No events yet.</div>'
+    : shown.map(e => {
+        const fp = e.agent.id + "|" + e.t + "|" + e.event + "|" + (e.tool || "");
+        const isNew = !feedSeen.has(fp);
+        feedSeen.add(fp);
+        const lvl = e.level || "info";
+        let what = '<span class="ev">' + esc(e.event) + '</span>';
+        if (e.tool) what += ' <span class="tool">' + esc(e.tool) + '</span>';
+        if (e.detail) what += ' <span class="det">— ' + esc(e.detail) + '</span>';
+        const isPending = e.event === "PermissionPrompt" && e.agent.pending;
+        const inlineBtns = isPending
+          ? '<div class="btns-inline">' +
+              '<button class="approve" data-act="approve" data-id="' + e.agent.id + '">✓ Approve</button>' +
+              '<button class="deny" data-act="deny" data-id="' + e.agent.id + '">✕ Deny</button>' +
+            '</div>'
+          : '';
+        return (
+          '<div class="row' + (isNew ? ' new' : '') + (isPending ? ' approvable' : '') + '" data-id="' + e.agent.id + '">' +
+            '<div class="t">' + humanTime(e.t) + '</div>' +
+            '<div class="who"><div class="avatar"><img src="' + avatarURL(e.agent.id) + '" alt=""></div><span class="n">' + esc(agentName(e.agent)) + '</span></div>' +
+            '<div class="what ' + lvl + '">' + what + '</div>' +
+            inlineBtns +
+          '</div>'
+        );
+      }).join('');
+  if (feedSeen.size > 500) feedSeen = new Set(Array.from(feedSeen).slice(-300));
+
+  // Leaderboard (by tokens desc)
+  const lb = arr.slice().sort((a, b) => ((b.inputTokens || 0) + (b.outputTokens || 0)) - ((a.inputTokens || 0) + (a.outputTokens || 0)));
+  document.getElementById("dash-leaderboard").innerHTML = lb.length === 0
+    ? '<div style="padding:14px; color: var(--muted)">No agents yet.</div>'
+    : ('<div class="header"><div></div><div>Agent</div><div class="r">Status</div><div class="r">Tokens</div><div class="r">Updated</div></div>' +
+       lb.map(a => (
+         '<div class="row" data-id="' + a.id + '">' +
+           '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+           '<div class="who"><div class="name">' + esc(agentName(a)) + '</div><div class="cwd">' + esc(cwdBase(a.cwd)) + '</div></div>' +
+           '<div class="stat-cell"><span class="status-pill ' + (a.status || "idle") + '"><span class="dot"></span>' + (a.status || "idle").replace("_", " ") + '</span></div>' +
+           '<div class="stat-cell"><strong>' + fmtNum((a.inputTokens || 0) + (a.outputTokens || 0)) + '</strong></div>' +
+           '<div class="stat-cell">' + humanAge(a.updatedAt) + ' ago</div>' +
+         '</div>'
+       )).join(''));
+
+  // Tool usage aggregation
+  const toolEntries = Object.entries(toolAgg).sort((a, b) => b[1] - a[1]);
+  document.getElementById("dash-tools").innerHTML = toolEntries.length === 0
+    ? '<div style="color: var(--muted); font-size: 12px">no tool calls yet</div>'
+    : toolEntries.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('');
+
+  // Per-agent horizontal bar chart (tokens).
+  const maxTok = Math.max(1, ...arr.map(a => (a.inputTokens || 0) + (a.outputTokens || 0)));
+  document.getElementById("dash-bars").innerHTML = arr.length === 0
+    ? '<div style="color: var(--muted); font-size: 12px">no agents</div>'
+    : arr.slice().sort((a, b) => ((b.inputTokens || 0) + (b.outputTokens || 0)) - ((a.inputTokens || 0) + (a.outputTokens || 0)))
+        .map(a => {
+          const tok = (a.inputTokens || 0) + (a.outputTokens || 0);
+          const pct = Math.max(1, Math.round((tok / maxTok) * 100));
+          return (
+            '<div class="row" data-id="' + a.id + '">' +
+              '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+              '<div class="track"><div class="fill" style="width:' + pct + '%"></div><span class="lbl">' + esc(agentName(a)) + '</span></div>' +
+              '<div class="num">' + fmtNum(tok) + '</div>' +
+            '</div>'
+          );
+        }).join('');
+
+  // Draw sparklines.
+  drawSparkline("chart-active", trend.map(s => s.active), { yMin: 0 });
+  document.getElementById("chart-active-val").textContent = trend.length ? trend[trend.length - 1].active : "0";
+  drawSparkline("chart-tokens", trend.map(s => s.tokens), { yMin: 0 });
+  document.getElementById("chart-tokens-val").textContent = fmtNum(trend.length ? trend[trend.length - 1].tokens : 0);
+
+  // Wire click handlers.
+  document.querySelectorAll("#dash-leaderboard .row, #dash-bars .row").forEach(r => {
+    r.onclick = () => selectAgent(r.dataset.id);
+  });
+  document.querySelectorAll("#dash-feed .row").forEach(r => {
+    r.onclick = (ev) => {
+      if (ev.target.closest(".btns-inline")) return;
+      selectAgent(r.dataset.id);
+    };
+  });
+  document.querySelectorAll("#dash-feed .btns-inline button").forEach(btn => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.id, act = btn.dataset.act;
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/agents/" + id + "/" + act, { method: "POST" });
+        if (!res.ok) alert(act + " failed: " + (await res.text()));
+      } finally { setTimeout(() => { btn.disabled = false; }, 800); }
+    };
+  });
+}
+
+// ─── Trend sampling + sparkline drawing ─────────
+// Sample every 5s, keep last 120 points (10 minutes). Total tokens = sum of
+// (input + output) across all agents; active = agents with status=running.
+const trend = [];
+function sampleTrend() {
+  let active = 0, tokens = 0;
+  for (const a of agents.values()) {
+    if (a.status === "running") active++;
+    tokens += (a.inputTokens || 0) + (a.outputTokens || 0);
+  }
+  trend.push({ t: Date.now(), active, tokens });
+  if (trend.length > 120) trend.shift();
+}
+function drawSparkline(id, values, opts) {
+  opts = opts || {};
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  const W = 300, H = 64, PAD = 4;
+  if (!values || values.length < 2) {
+    svg.innerHTML = '<text class="axis" x="' + (W/2) + '" y="' + (H/2) + '" text-anchor="middle" dominant-baseline="middle">not enough data yet</text>';
+    return;
+  }
+  const yMin = opts.yMin !== undefined ? opts.yMin : Math.min(...values);
+  let yMax = Math.max(...values);
+  if (yMax === yMin) yMax = yMin + 1;
+  const stepX = (W - 2 * PAD) / (values.length - 1);
+  const toY = v => H - PAD - ((v - yMin) / (yMax - yMin)) * (H - 2 * PAD);
+  const pts = values.map((v, i) => (PAD + i * stepX).toFixed(1) + "," + toY(v).toFixed(1));
+  const line = "M " + pts.join(" L ");
+  const area = line + " L " + (PAD + (values.length - 1) * stepX).toFixed(1) + "," + (H - PAD) + " L " + PAD + "," + (H - PAD) + " Z";
+  svg.innerHTML =
+    '<path class="area" d="' + area + '"/>' +
+    '<path class="line" d="' + line + '"/>' +
+    '<text class="axis" x="' + PAD + '" y="12">' + fmtNum(yMax) + '</text>' +
+    '<text class="axis" x="' + PAD + '" y="' + (H - 4) + '">' + fmtNum(yMin) + '</text>';
+}
+
+function tileHero(lab, val, sub, spark, mod) {
+  return '<span class="hero ' + (mod || '') + '"><span class="lab">' + esc(lab) + '</span><span class="val">' + esc(String(val)) + '</span>' + (sub ? '<span class="sub">· ' + esc(sub) + '</span>' : '') + '</span>';
+}
+function tileTok(lab, val, sub) {
+  return '<div class="tok"><div class="lab">' + esc(lab) + '</div><div class="val">' + fmtNum(val) + '</div><div class="sub">' + esc(sub) + '</div></div>';
+}
+function tileTokCost(lab, val, sub) {
+  return '<div class="tok cost"><div class="lab">' + esc(lab) + '</div><div class="val">' + esc(val) + '</div><div class="sub">' + esc(sub) + '</div></div>';
+}
+
+// ─── Sidebar (with user-defined order + drag) ───
+// Persist manual order in localStorage. New agents append; missing ids in
+// storage default to their spawn time.
+const ORDER_KEY = "agentctl.sidebarOrder";
+function loadOrder() {
+  try { return JSON.parse(localStorage.getItem(ORDER_KEY) || "[]"); } catch (_) { return []; }
+}
+function saveOrder(arr) { localStorage.setItem(ORDER_KEY, JSON.stringify(arr)); }
+function sortedAgents() {
+  const arr = Array.from(agents.values());
+  const order = loadOrder();
+  const idx = new Map(order.map((id, i) => [id, i]));
+  return arr.sort((a, b) => {
+    const ai = idx.has(a.id) ? idx.get(a.id) : 1e9;
+    const bi = idx.has(b.id) ? idx.get(b.id) : 1e9;
+    if (ai !== bi) return ai - bi;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+}
+
+function renderSidebar() {
+  const arr = sortedAgents();
+  if (arr.length === 0) {
+    sidebar.innerHTML = '<div class="empty-sidebar">No agents yet.<br>Click <strong>+ New Agent</strong> to spawn one.</div>';
+    return;
+  }
+  sidebar.innerHTML = "";
+  for (const a of arr) {
+    const c = document.createElement("div");
+    c.className = "agent-card " + (a.status || "idle")
+      + (selectedId === a.id ? " selected" : "")
+      + (a.pending ? " pending" : "");
+    c.dataset.id = a.id;
+    c.draggable = true;
+    const task = a.currentTask || a.prompt || "";
+    const activityText = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
+    const tokTotal = (a.inputTokens || 0) + (a.outputTokens || 0);
+    c.innerHTML = (
+      '<button class="kill-btn" title="Kill agent">×</button>' +
+      '<div class="card-head">' +
+        '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="card-body">' +
+          '<div class="card-name"><span class="name">' + esc(agentName(a)) + '</span>' +
+          (a.pending ? '<span class="pending-badge">Action</span>' : '') +
+          '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
+          '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
+          '<div class="card-status-row"><span class="status-pill ' + (a.status || "idle") + '"><span class="dot"></span>' + (a.status || "idle").replace("_", " ") + '</span></div>' +
+          (task ? '<div class="card-activity" title="' + esc(task) + '">▸ ' + esc(task) + '</div>' : '') +
+          (activityText ? '<div class="card-activity">' + esc(activityText) + '</div>' : '') +
+          (tokTotal > 0 ? '<div class="card-token">' + fmtNum(a.inputTokens || 0) + ' in · ' + fmtNum(a.outputTokens || 0) + ' out</div>' : '') +
+        '</div>' +
+      '</div>'
+    );
+    // Card click → select (but only if the click didn't originate on kill).
+    c.addEventListener("click", (ev) => {
+      if (ev.target.closest(".kill-btn")) return;
+      selectAgent(a.id);
+    });
+    c.querySelector(".kill-btn").addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (!confirm("Kill " + agentName(a) + "?")) return;
+      await fetch("/api/agents/" + a.id, { method: "DELETE" });
+    });
+
+    // Drag & drop reordering.
+    c.addEventListener("dragstart", (ev) => {
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", a.id);
+      c.classList.add("dragging");
+    });
+    c.addEventListener("dragend", () => {
+      c.classList.remove("dragging");
+      document.querySelectorAll(".agent-card").forEach(x => x.classList.remove("drop-before", "drop-after"));
+    });
+    c.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      const rect = c.getBoundingClientRect();
+      const before = (ev.clientY - rect.top) < rect.height / 2;
+      c.classList.toggle("drop-before", before);
+      c.classList.toggle("drop-after", !before);
+    });
+    c.addEventListener("dragleave", () => {
+      c.classList.remove("drop-before", "drop-after");
+    });
+    c.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      const draggedId = ev.dataTransfer.getData("text/plain");
+      if (!draggedId || draggedId === a.id) return;
+      const rect = c.getBoundingClientRect();
+      const before = (ev.clientY - rect.top) < rect.height / 2;
+      reorderAgents(draggedId, a.id, before);
+    });
+
+    sidebar.appendChild(c);
+  }
+}
+
+function reorderAgents(movedId, pivotId, before) {
+  const currentOrder = sortedAgents().map(a => a.id);
+  const from = currentOrder.indexOf(movedId);
+  if (from < 0) return;
+  currentOrder.splice(from, 1);
+  let to = currentOrder.indexOf(pivotId);
+  if (to < 0) return;
+  if (!before) to += 1;
+  currentOrder.splice(to, 0, movedId);
+  saveOrder(currentOrder);
+  renderSidebar();
+}
+
+// ─── Detail pane ────────────────────────────────
+function selectAgent(id) {
+  if (selectedId === id) return;
+  selectedId = id;
+  renderSidebar();
+  renderDetail(true);
+}
+
+function renderDetail(mountTerminal) {
+  const a = agents.get(selectedId);
+  const dash = document.getElementById("dashboard");
+  const full = document.getElementById("detail-full");
+  if (!a) {
+    dash.style.display = "block";
+    full.style.display = "none";
+    teardownTerminal();
+    renderDashboard();
+    return;
+  }
+  dash.style.display = "none";
+  full.style.display = "flex";
+
+  document.getElementById("d-avatar").src = avatarURL(a.id);
+  document.getElementById("d-name").textContent = agentName(a);
+  document.getElementById("d-cwd").textContent = a.cwd;
+  document.getElementById("d-id").textContent = a.id;
+  const status = a.status || "idle";
+  document.getElementById("d-status").innerHTML = '<span class="status-pill ' + status + '"><span class="dot"></span>' + status.replace("_", " ") + '</span>';
+
+  // Approval bar
+  const approvalBar = document.getElementById("d-approval");
+  if (a.pending) {
+    approvalBar.style.display = "flex";
+    document.getElementById("d-approval-msg").textContent = a.pending.message || "Claude is waiting for your decision.";
+  } else {
+    approvalBar.style.display = "none";
+  }
+
+  // Side info panel
+  renderSideInfo(a);
+
+  // Terminal: mount if switching agents, otherwise leave alone
+  if (mountTerminal) mountTerminalFor(a.id);
+}
+
+function renderSideInfo(a) {
+  const tools = topTools(a.toolCounts, 20);
+  const toolsHTML = tools.length
+    ? '<div class="tool-list">' + tools.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('') + '</div>'
+    : '<div style="color:var(--muted);font-size:12px">no tool calls yet</div>';
+
+  const history = (a.taskHistory || []).slice().reverse();
+  const historyHTML = history.length
+    ? history.map((t, i) => '<div class="task-block ' + (i === 0 ? '' : 'dim') + '">' + esc(t) + '</div>').join('')
+    : '<div style="color:var(--muted);font-size:12px">no prompts recorded yet</div>';
+
+  const acts = (a.activity || []).slice().reverse();
+  const actHTML = acts.length
+    ? acts.map(e => {
+        const lvl = e.level || "info";
+        let msg = '<span class="ev">' + esc(e.event) + '</span>';
+        if (e.tool) msg += ' <span class="tool">' + esc(e.tool) + '</span>';
+        if (e.detail) msg += ' <span class="det">— ' + esc(e.detail) + '</span>';
+        return '<div class="ent"><div class="t">' + humanTime(e.t) + '</div><div class="msg ' + lvl + '">' + msg + '</div></div>';
+      }).join('')
+    : '<div style="color:var(--muted)">no events yet</div>';
+
+  document.getElementById("side-info").innerHTML = (
+    '<h4>Tokens</h4>' +
+    '<div class="token-grid">' +
+      '<div class="token-box"><div class="lab">Input</div><div class="val">' + fmtNum(a.inputTokens || 0) + '</div></div>' +
+      '<div class="token-box"><div class="lab">Output</div><div class="val">' + fmtNum(a.outputTokens || 0) + '</div></div>' +
+      '<div class="token-box"><div class="lab">Cache read</div><div class="val">' + fmtNum(a.cacheReadTokens || 0) + '</div></div>' +
+      '<div class="token-box"><div class="lab">Cache write</div><div class="val">' + fmtNum(a.cacheCreationTokens || 0) + '</div></div>' +
+    '</div>' +
+    '<div style="color:var(--muted); font-size: 10.5px; margin-top: 4px;">' + (a.messageCount || 0) + ' assistant messages · updated ' + humanAge(a.updatedAt) + ' ago</div>' +
+
+    '<h4>Current task</h4>' +
+    historyHTML +
+
+    '<h4>Tool usage</h4>' +
+    toolsHTML +
+
+    '<h4>Metadata</h4>' +
+    '<div class="kv">' +
+      '<div class="k">session</div><div class="v">' + esc(a.sessionId) + '</div>' +
+      '<div class="k">spawned</div><div class="v plain">' + humanAge(a.createdAt) + ' ago</div>' +
+      (a.transcriptPath ? '<div class="k">transcript</div><div class="v">' + esc(a.transcriptPath) + '</div>' : '') +
+    '</div>' +
+
+    '<h4>Activity</h4>' +
+    '<div class="activity">' + actHTML + '</div>'
+  );
+}
+
+// ─── Embedded terminal ──────────────────────────
+function teardownTerminal() {
+  window.removeEventListener("resize", onTermResize);
+  if (termWS) { try { termWS.close(); } catch(e){} termWS = null; }
+  if (term) { term.dispose(); term = null; }
+  termAgentId = null;
+  document.getElementById("term-container").innerHTML = "";
+}
+function onTermResize() { if (fitAddon) fitAddon.fit(); }
+function mountTerminalFor(id) {
+  if (termAgentId === id && term) return;
+  teardownTerminal();
+  termAgentId = id;
+  const container = document.getElementById("term-container");
+  term = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, theme: { background: "#000000" } });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+  requestAnimationFrame(() => { try { fitAddon.fit(); } catch(e){} });
+  window.addEventListener("resize", onTermResize);
+  termWS = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/session/" + id);
+  termWS.binaryType = "arraybuffer";
+  termWS.onmessage = (ev) => {
+    if (typeof ev.data === "string") term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+  };
+  termWS.onclose = () => { if (term) term.write("\r\n[disconnected]\r\n"); };
+  term.onData((d) => { if (termWS && termWS.readyState === 1) termWS.send(d); });
+}
+
+// ─── Approve / deny ─────────────────────────────
+async function sendAnswer(kind) {
+  if (!selectedId) return;
+  const btn = document.getElementById(kind === "approve" ? "d-approve" : "d-deny");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/agents/" + selectedId + "/" + kind, { method: "POST" });
+    if (!res.ok) alert(kind + " failed: " + (await res.text()));
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 800);
+  }
+}
+document.getElementById("d-approve").onclick = () => sendAnswer("approve");
+document.getElementById("d-deny").onclick = () => sendAnswer("deny");
+document.getElementById("d-kill").onclick = async () => {
+  if (!selectedId) return;
+  if (!confirm("Kill this agent?")) return;
+  await fetch("/api/agents/" + selectedId, { method: "DELETE" });
+};
+
+// Raw-keys sender: escape sequences like \r, \n, \x1b, \t, \b — for edge-case
+// permission prompts where the default Approve/Deny didn't work.
+function unescapeKeys(s) {
+  return s
+    .replace(/\\r/g, "\r")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\b/g, "\b")
+    .replace(/\\e/g, "\x1b")
+    .replace(/\\x1b/g, "\x1b")
+    .replace(/\\\\/g, "\\");
+}
+async function sendRawKeys(text) {
+  if (!selectedId || !text) return;
+  const data = unescapeKeys(text);
+  const res = await fetch("/api/agents/" + selectedId + "/input", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data })
+  });
+  if (!res.ok) alert("send failed: " + (await res.text()));
+}
+document.getElementById("d-raw-send").onclick = () => {
+  const el = document.getElementById("d-raw");
+  sendRawKeys(el.value);
+  el.value = "";
+};
+document.getElementById("d-raw").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); document.getElementById("d-raw-send").click(); }
+});
+
+// ─── New-agent modal ────────────────────────────
+document.getElementById("new-btn").onclick = () => {
+  document.getElementById("cwd-input").value = "";
+  document.getElementById("prompt-input").value = "";
+  document.getElementById("modal").classList.add("show");
+  document.getElementById("cwd-input").focus();
+};
+document.getElementById("cancel-btn").onclick = () => document.getElementById("modal").classList.remove("show");
+document.getElementById("create-btn").onclick = async () => {
+  const cwd = document.getElementById("cwd-input").value.trim();
+  const prompt = document.getElementById("prompt-input").value.trim();
+  if (!cwd) { alert("cwd is required"); return; }
+  const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({cwd, prompt}) });
+  if (!res.ok) { alert("Spawn failed: " + await res.text()); return; }
+  document.getElementById("modal").classList.remove("show");
+};
+
+// Return to dashboard: click the header logo.
+document.querySelector("header h1").onclick = () => {
+  selectedId = null;
+  teardownTerminal();
+  renderSidebar();
+  renderDetail(false);
+};
+
+// ─── Live updates ───────────────────────────────
+const dashWS = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/dashboard");
+dashWS.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === "snapshot") {
+    agents.clear();
+    for (const a of msg.agents) agents.set(a.id, a);
+  } else if (msg.type === "upsert") {
+    agents.set(msg.agent.id, msg.agent);
+  } else if (msg.type === "remove") {
+    agents.delete(msg.id);
+    if (selectedId === msg.id) {
+      selectedId = null;
+      teardownTerminal();
+    }
+  }
+  renderStats();
+  renderSidebar();
+  renderDetail(false);
+};
+
+// Trend sampling every 5s (also drives dashboard re-render — sparklines need
+// fresh data). Sampling ticks continue running even while an agent is
+// selected so the dashboard is up-to-date when you return.
+setInterval(() => {
+  sampleTrend();
+  renderStats();
+  renderSidebar();
+  renderDetail(false);
+}, 5000);
+
+// Initial render (dashboard view — no selection) plus a first sample so the
+// sparklines have at least one point on load.
+sampleTrend();
+renderStats();
+renderSidebar();
+renderDetail(false);
+</script>
+</body>
+</html>
