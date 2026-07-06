@@ -21,6 +21,7 @@ var staticFS embed.FS
 var authToken string
 
 func main() {
+	setupLogging()
 	port := flag.String("port", "7317", "TCP port to bind on 127.0.0.1")
 	bind := flag.String("bind", "127.0.0.1", "bind address")
 	tokenFlag := flag.String("token", "", "shared-secret auth token (random if empty)")
