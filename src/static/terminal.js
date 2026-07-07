@@ -156,7 +156,6 @@ function mountTerminalFor(id) {
   if (term.onSelectionChange) {
     term.onSelectionChange(() => {
       const sel = term.getSelection ? term.getSelection() : "";
-      console.log("[xterm-selection]", sel ? sel.length + " chars: " + JSON.stringify(sel.slice(0, 60)) : "(empty)");
       if (sel && sel !== lastSelection) {
         lastSelection = sel;
         copyToClipboard(sel).then(ok => {
@@ -174,7 +173,14 @@ function mountTerminalFor(id) {
     const isV = ev.key === "v" || ev.key === "V";
     const shift = ev.shiftKey;
     const ctrlOrCmd = ev.ctrlKey || (isMac && ev.metaKey);
-    // Copy: Ctrl+C / Cmd+C / Ctrl+Shift+C — if a selection exists.
+    // Copy: try Ctrl+C / Cmd+C with a selection first; falls through to
+    // SIGINT if no selection is detected. Ctrl+Shift+C ALWAYS opens the
+    // output modal — the reliable fallback for browsers where xterm's
+    // selection doesn't populate (see issue #18).
+    if (ctrlOrCmd && isC && shift && !ev.altKey) {
+      openOutputModal();
+      return false;
+    }
     if (ctrlOrCmd && isC && !ev.altKey) {
       const sel = (term.getSelection && term.getSelection()) || lastSelection ||
                   (window.getSelection && String(window.getSelection())) || "";
@@ -239,6 +245,22 @@ async function sendToPTY(data) {
 // buffer. This bypasses xterm's finicky selection layer entirely.
 const OUTPUT_BUFFER_MAX = 65536;
 let termOutputBuffer = "";
+// Reliable copy path shared by the "Copy" button and the Ctrl+Shift+C
+// key binding — see issue #18. Some browsers don't populate xterm's
+// selection reliably; this modal always works.
+function openOutputModal() {
+  const clean = stripAnsiClient(termOutputBuffer).replace(/^\s+/, "");
+  const body = document.getElementById("output-body");
+  const modal = document.getElementById("output-modal");
+  if (!body || !modal) return;
+  body.textContent = clean || "(no output yet)";
+  modal.classList.add("show");
+  // Pre-select everything so Ctrl+C copies without an extra drag.
+  const range = document.createRange();
+  range.selectNodeContents(body);
+  const winSel = window.getSelection && window.getSelection();
+  if (winSel) { winSel.removeAllRanges(); winSel.addRange(range); }
+}
 function appendToOutputBuffer(chunk) {
   termOutputBuffer += chunk;
   if (termOutputBuffer.length > OUTPUT_BUFFER_MAX * 2) {
@@ -271,12 +293,14 @@ function bootTerminal() {
     },
   });
 
-  document.getElementById("d-copy").onclick = () => {
-    const clean = stripAnsiClient(termOutputBuffer).replace(/^\s+/, "");
-    document.getElementById("output-body").textContent = clean || "(no output yet)";
-    document.getElementById("output-modal").classList.add("show");
-  };
+  document.getElementById("d-copy").onclick = () => openOutputModal();
   document.getElementById("output-close").onclick = () => document.getElementById("output-modal").classList.remove("show");
+  // Esc closes the output modal from anywhere (matches the sa-modal UX).
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    const m = document.getElementById("output-modal");
+    if (m && m.classList.contains("show")) m.classList.remove("show");
+  });
   document.getElementById("output-copy-all").onclick = async () => {
     const text = document.getElementById("output-body").textContent;
     if (!text) { toast.error("Nothing to copy"); return; }
