@@ -92,6 +92,10 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		id = rest[:i]
 		subpath = rest[i+1:]
 	}
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid agent id", http.StatusBadRequest)
+		return
+	}
 	s := getSession(id)
 	if s == nil {
 		http.Error(w, "not found", http.StatusNotFound)

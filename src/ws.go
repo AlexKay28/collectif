@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,7 +21,17 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleSessionWS(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/ws/session/")
+	// Strip prefix and drop any trailing subpath so /ws/session/<id>/... still
+	// resolves — otherwise getSession sees "<id>/..." and silently misses.
+	rest := strings.TrimPrefix(r.URL.Path, "/ws/session/")
+	id := rest
+	if i := strings.Index(rest, "/"); i >= 0 {
+		id = rest[:i]
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
 	s := getSession(id)
 	if s == nil {
 		http.Error(w, "not found", http.StatusNotFound)
