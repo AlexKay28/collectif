@@ -175,7 +175,20 @@ function openSubagentModal(name, scope) {
       '<label><input type="checkbox" value="' + esc(o.name) + '"' + (chosen.has(o.name) ? " checked" : "") + '>' + esc(o.name) + '</label>'
     )).join('');
   }
-  document.getElementById("sa-delete").style.display = name ? "" : "none";
+  // Re-arm the delete button fresh on every open. armConfirmButton uses
+  // addEventListener + closure state, so we clone-replace the node to drop
+  // any prior listener/armed state before re-wiring. Matches the inline
+  // "click again" pattern used by #d-kill and the sidebar kill button.
+  const oldDel = document.getElementById("sa-delete");
+  const del = oldDel.cloneNode(true);
+  del.classList.remove("confirming");
+  del.textContent = "Delete";
+  del.style.display = name ? "" : "none";
+  oldDel.parentNode.replaceChild(del, oldDel);
+  armConfirmButton(del, {
+    armedLabel: "Click again to delete",
+    onConfirm: deleteSubagent,
+  });
   document.getElementById("sa-modal").classList.add("show");
   if (!name) document.getElementById("sa-name").focus();
 }
@@ -216,7 +229,6 @@ async function saveSubagent() {
 }
 async function deleteSubagent() {
   if (!teamEditingName) return;
-  if (!confirm("Delete subagent " + teamEditingName + " (" + teamEditingScope + ")?")) return;
   const res = await fetch("/api/agents/" + selectedId + "/subagents/" + encodeURIComponent(teamEditingName) + "?scope=" + encodeURIComponent(teamEditingScope), { method: "DELETE" });
   if (!res.ok) { toast.error("Delete failed: " + (await res.text())); return; }
   toast.success("Deleted " + teamEditingName);
@@ -232,5 +244,6 @@ function bootTeam() {
   document.getElementById("team-empty-new").onclick = () => openSubagentModal(null);
   document.getElementById("sa-cancel").onclick = closeSubagentModal;
   document.getElementById("sa-save").onclick = saveSubagent;
-  document.getElementById("sa-delete").onclick = deleteSubagent;
+  // #sa-delete is wired per-open in openSubagentModal via armConfirmButton
+  // (inline "click again to delete") — no boot-time click handler needed.
 }
