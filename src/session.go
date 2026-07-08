@@ -116,12 +116,13 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.Mutex
-	ring     []byte
-	ringLen  int
-	ringHead int
-	subs     map[*wsSub]bool
-	subMu    sync.Mutex
+	mu         sync.Mutex
+	ring       []byte
+	ringLen    int
+	ringHead   int
+	ringSerial uint64
+	subs       map[*wsSub]bool
+	subMu      sync.Mutex
 }
 
 func newSession(id, sid, cwd, prompt string) *Session {
@@ -153,13 +154,29 @@ func newSession(id, sid, cwd, prompt string) *Session {
 func (s *Session) writeRing(p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, b := range p {
-		s.ring[s.ringHead] = b
-		s.ringHead = (s.ringHead + 1) % ringSize
-		if s.ringLen < ringSize {
-			s.ringLen++
-		}
+	n := len(p)
+	if n >= ringSize {
+		p = p[n-ringSize:]
+		n = ringSize
 	}
+	first := copy(s.ring[s.ringHead:], p)
+	copy(s.ring, p[first:])
+	s.ringHead = (s.ringHead + n) % ringSize
+	if s.ringLen+n > ringSize {
+		s.ringLen = ringSize
+	} else {
+		s.ringLen += n
+	}
+	s.ringSerial++
+}
+
+// ringSerial returns a monotonically increasing counter that advances every
+// time writeRing appends bytes. Cheap poll for the menu detector to skip
+// a scan when the PTY hasn't produced any new output since last tick.
+func (s *Session) getRingSerial() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ringSerial
 }
 
 func (s *Session) snapshotRing() []byte {
