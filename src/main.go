@@ -58,6 +58,8 @@ func main() {
 	mux.HandleFunc("/api/hooks", handleHook)
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
+	mux.HandleFunc("/healthz", handleHealthz)
+	mux.HandleFunc("/metrics", handleMetrics)
 
 	startPendingSweeper()
 
@@ -174,7 +176,7 @@ func withAuth(h http.Handler) http.Handler {
 }
 
 func isProtectedPath(p string) bool {
-	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws/")
+	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws/") || p == "/metrics"
 }
 
 func checkToken(r *http.Request) bool {

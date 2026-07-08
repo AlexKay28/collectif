@@ -34,6 +34,7 @@ var (
 )
 
 func handleHook(w http.ResponseWriter, r *http.Request) {
+	hooksReceived.Add(1)
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
