@@ -108,11 +108,17 @@ func startMenuDetector(ctx context.Context, s *Session) {
 	go func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
+		var lastSerial uint64
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				serial := s.getRingSerial()
+				if serial == lastSerial {
+					continue
+				}
+				lastSerial = serial
 				opts := detectMenu(s.snapshotRing())
 				if !menusEqual(opts, s.getMenuOptions()) {
 					s.setMenuOptions(opts)

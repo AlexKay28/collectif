@@ -24,7 +24,51 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 	path := s.TranscriptPath
 	s.mu.Unlock()
 
+	// shouldExit returns true when the session is gone or terminal — used to
+	// stop polling for a transcript that will never grow again.
+	shouldExit := func() bool {
+		if getSession(s.ID) == nil {
+			return true
+		}
+		s.mu.Lock()
+		st := s.Status
+		s.mu.Unlock()
+		return st == "stopped" || st == "error"
+	}
+
+	clearWatching := func() {
+		s.mu.Lock()
+		s.watching = false
+		s.mu.Unlock()
+	}
+
 	go func() {
+		defer clearWatching()
+
+		// Poll until the transcript file appears (Claude may take a moment to
+		// create it). Bail out early if the session dies before it exists.
+		var f *os.File
+		openTicker := time.NewTicker(500 * time.Millisecond)
+		for f == nil {
+			var err error
+			f, err = os.Open(path)
+			if err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				openTicker.Stop()
+				return
+			case <-openTicker.C:
+			}
+			if shouldExit() {
+				openTicker.Stop()
+				return
+			}
+		}
+		openTicker.Stop()
+		defer f.Close()
+
 		var partial []byte
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -35,9 +79,8 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 				return
 			case <-ticker.C:
 			}
-			f, err := os.Open(path)
-			if err != nil {
-				continue
+			if shouldExit() {
+				return
 			}
 
 			s.mu.Lock()
@@ -45,7 +88,6 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 			s.mu.Unlock()
 
 			if _, err := f.Seek(offset, 0); err != nil {
-				_ = f.Close()
 				continue
 			}
 			br := bufio.NewReader(f)
@@ -75,7 +117,6 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 					break
 				}
 			}
-			_ = f.Close()
 
 			if read > 0 {
 				s.mu.Lock()
