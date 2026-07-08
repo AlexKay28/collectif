@@ -1,5 +1,33 @@
 package main
 
+// Locking model
+//
+// Session has three distinct locks and one immutable-after-publish contract:
+//
+//   - s.mu (sync.Mutex): covers most mutable Session fields — Status,
+//     LastActivity, CurrentTask, LastTool, ToolCounts, TaskHistory,
+//     Activity, Pending, MenuOptions, AskQuestion, LastPreTool*, token
+//     totals, MessageCount, UpdatedAt, and the ring buffer state.
+//
+//   - Cmd, PTY, SettingsDir, and HookToken are set ONCE — in newSession or
+//     spawnClaude — before the session is published to the package-level
+//     registry, and are then treated as immutable. They are read through the
+//     pty() / cmd() accessors, which take s.mu to establish a
+//     happens-before edge with the writer in spawnClaude (see issue #3).
+//     Direct field reads are avoided to keep the race detector quiet and
+//     to make the ownership boundary obvious.
+//
+//   - s.subMu (sync.Mutex): guards s.subs ONLY. It is never held while
+//     s.mu is held (and vice versa) — the two mutexes are strictly
+//     independent. Keep it that way to avoid nested-lock deadlocks.
+//
+//   - registryMu (package-level, sync.RWMutex): guards the registry,
+//     sessionToAgent, and hookToAgent maps. Lock ordering is
+//     registryMu -> s.mu, NEVER the reverse. Do not call any method that
+//     takes s.mu (or s.subMu) while holding registryMu for write; readers
+//     that need per-session state should snapshot *Session pointers under
+//     the RLock and then release before touching session methods.
+
 import (
 	"bytes"
 	"context"
@@ -149,6 +177,22 @@ func newSession(id, sid, cwd, prompt string) *Session {
 		s.TaskHistory = []string{prompt}
 	}
 	return s
+}
+
+// pty returns the session's PTY handle under s.mu. PTY is set once in
+// spawnClaude and then treated as immutable; the lock here just establishes
+// the happens-before edge with that writer (see issue #3).
+func (s *Session) pty() *os.File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.PTY
+}
+
+// cmd returns the session's *exec.Cmd under s.mu. Same contract as pty().
+func (s *Session) cmd() *exec.Cmd {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Cmd
 }
 
 func (s *Session) writeRing(p []byte) {

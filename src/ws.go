@@ -63,12 +63,13 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if s.PTY == nil {
+		pt := s.pty()
+		if pt == nil {
 			continue
 		}
 		switch mt {
 		case websocket.TextMessage, websocket.BinaryMessage:
-			_, _ = s.PTY.Write(data)
+			_, _ = pt.Write(data)
 		}
 	}
 }

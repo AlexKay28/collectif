@@ -134,8 +134,8 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodDelete:
-		if s.Cmd != nil && s.Cmd.Process != nil {
-			proc := s.Cmd.Process
+		if c := s.cmd(); c != nil && c.Process != nil {
+			proc := c.Process
 			pid := proc.Pid
 			pgid, err := syscall.Getpgid(pid)
 			if err == nil {
@@ -174,7 +174,8 @@ func handleAgentInput(w http.ResponseWriter, r *http.Request, s *Session) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.PTY == nil {
+	pt := s.pty()
+	if pt == nil {
 		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -182,7 +183,7 @@ func handleAgentInput(w http.ResponseWriter, r *http.Request, s *Session) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	n, err := s.PTY.Write([]byte(req.Data))
+	n, err := pt.Write([]byte(req.Data))
 	log.Printf("[%s] pty input via /input: n=%d bytes=%s err=%v", s.ID, n, hex.EncodeToString([]byte(req.Data)), err)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -199,13 +200,14 @@ func handleAgentAnswer(w http.ResponseWriter, r *http.Request, s *Session, prima
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.PTY == nil {
+	pt := s.pty()
+	if pt == nil {
 		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
 		return
 	}
 	writeChunks := func(label string, chunks []string) {
 		for i, k := range chunks {
-			n, err := s.PTY.Write([]byte(k))
+			n, err := pt.Write([]byte(k))
 			log.Printf("[%s] pty %s chunk %d/%d: n=%d bytes=%s err=%v",
 				s.ID, label, i+1, len(chunks), n, hex.EncodeToString([]byte(k)), err)
 			if err != nil {
@@ -237,7 +239,8 @@ func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.PTY == nil {
+	pt := s.pty()
+	if pt == nil {
 		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -249,7 +252,7 @@ func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
 		http.Error(w, "cols/rows out of range", http.StatusBadRequest)
 		return
 	}
-	if err := pty.Setsize(s.PTY, &pty.Winsize{Rows: req.Rows, Cols: req.Cols}); err != nil {
+	if err := pty.Setsize(pt, &pty.Winsize{Rows: req.Rows, Cols: req.Cols}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

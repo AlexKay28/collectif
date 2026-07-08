@@ -211,13 +211,14 @@ func shutdownAllSessions(grace time.Duration) {
 	registryMu.RUnlock()
 
 	for _, s := range sessions {
-		if s.Cmd == nil || s.Cmd.Process == nil {
+		c := s.cmd()
+		if c == nil || c.Process == nil {
 			continue
 		}
-		if pgid, err := syscall.Getpgid(s.Cmd.Process.Pid); err == nil {
+		if pgid, err := syscall.Getpgid(c.Process.Pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 		} else {
-			_ = s.Cmd.Process.Signal(syscall.SIGTERM)
+			_ = c.Process.Signal(syscall.SIGTERM)
 		}
 	}
 
@@ -225,8 +226,9 @@ func shutdownAllSessions(grace time.Duration) {
 	for {
 		alive := 0
 		for _, s := range sessions {
-			if s.Cmd != nil && s.Cmd.Process != nil && s.Cmd.ProcessState == nil {
-				if err := s.Cmd.Process.Signal(syscall.Signal(0)); err == nil {
+			c := s.cmd()
+			if c != nil && c.Process != nil && c.ProcessState == nil {
+				if err := c.Process.Signal(syscall.Signal(0)); err == nil {
 					alive++
 				}
 			}
@@ -238,16 +240,17 @@ func shutdownAllSessions(grace time.Duration) {
 	}
 
 	for _, s := range sessions {
-		if s.Cmd == nil || s.Cmd.Process == nil {
+		c := s.cmd()
+		if c == nil || c.Process == nil {
 			continue
 		}
-		if err := s.Cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		if err := c.Process.Signal(syscall.Signal(0)); err != nil {
 			continue
 		}
-		if pgid, err := syscall.Getpgid(s.Cmd.Process.Pid); err == nil {
+		if pgid, err := syscall.Getpgid(c.Process.Pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
-			_ = s.Cmd.Process.Kill()
+			_ = c.Process.Kill()
 		}
 	}
 }

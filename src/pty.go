@@ -30,8 +30,13 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 	if err != nil {
 		return err
 	}
+	// Publish Cmd/PTY under s.mu so readers via the pty()/cmd() accessors
+	// see a fully initialized handle (issue #3). Release before spawning
+	// the reader goroutine — cmd.Wait blocks and we don't want to hold s.mu.
+	s.mu.Lock()
 	s.Cmd = cmd
 	s.PTY = ptmx
+	s.mu.Unlock()
 
 	// Default a reasonable window size; xterm.js sends resize elsewhere if we add it later.
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
