@@ -62,6 +62,11 @@ func writeHookSettings(hookURL string) (settingsDir, settingsFile string, err er
 	return dir, f, nil
 }
 
+// hookURL always targets 127.0.0.1: Claude Code runs on the same host as
+// collectif, so the hook callback is a loopback call regardless of what
+// address the server is bound to. Using the bind address verbatim would
+// break when -bind is 0.0.0.0 (not a routable destination).
 func hookURL(bind, port, hookToken string) string {
-	return fmt.Sprintf("http://%s:%s/api/hooks?ht=%s", bind, port, hookToken)
+	_ = bind
+	return fmt.Sprintf("http://127.0.0.1:%s/api/hooks?ht=%s", port, hookToken)
 }

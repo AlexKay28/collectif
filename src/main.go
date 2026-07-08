@@ -8,6 +8,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -62,6 +63,10 @@ func main() {
 
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)
+	if !isLoopbackBind(*bind) {
+		log.Printf("WARNING: bind address %q is not a loopback address — any client that can reach this host on the network can access collectif if they obtain the auth token", *bind)
+		log.Printf("WARNING: the auth token is printed below in plaintext; anyone who sees these logs (including via a shared terminal, log file, or process listing) can authenticate")
+	}
 	log.Printf("Auth token: %s", authToken)
 	log.Printf("Open http://%s:%s/?token=%s", *bind, *port, authToken)
 
@@ -121,15 +126,28 @@ func saveTokenFile(t string) error {
 	return os.WriteFile(p, []byte(t+"\n"), 0o600)
 }
 
+// isLoopbackBind reports whether bind refers to the local loopback interface.
+// We treat empty string as loopback-safe (Go's http server treats it the same
+// as "0.0.0.0", but our default is "127.0.0.1" so empty shouldn't occur; be
+// conservative and don't warn). Anything else that isn't 127.x/localhost/::1
+// gets a warning at startup.
+func isLoopbackBind(bind string) bool {
+	if bind == "" || bind == "localhost" || bind == "::1" || bind == "[::1]" {
+		return true
+	}
+	return strings.HasPrefix(bind, "127.")
+}
+
 func randomToken(n int) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		log.Fatalf("rand: %v", err)
-	}
+	max := big.NewInt(int64(len(alphabet)))
 	out := make([]byte, n)
-	for i, b := range buf {
-		out[i] = alphabet[int(b)%len(alphabet)]
+	for i := 0; i < n; i++ {
+		idx, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			log.Fatalf("rand: %v", err)
+		}
+		out[i] = alphabet[idx.Int64()]
 	}
 	return string(out)
 }
