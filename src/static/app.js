@@ -34,6 +34,12 @@ function connectDashboardWS() {
         selectedId = null;
         teardownTerminal();
       }
+    } else if (msg.type === "hourly_cost") {
+      // #35 budget strip data.
+      handleHourlyCost(msg);
+    } else if (msg.type === "cost_warning") {
+      // #35 toast + highlight the sidebar tile.
+      handleCostWarning(msg);
     }
     scheduleRender("all");
   };
@@ -111,6 +117,8 @@ function boot() {
   document.getElementById("new-btn").onclick = () => {
     cwdInput.value = "";
     document.getElementById("prompt-input").value = "";
+    const capIn = document.getElementById("cap-input");
+    if (capIn) capIn.value = "";
     cwdHint.textContent = "";
     cwdHint.className = "cwd-hint";
     document.getElementById("modal").classList.add("show");
@@ -120,8 +128,15 @@ function boot() {
   document.getElementById("create-btn").onclick = async () => {
     const cwd = cwdInput.value.trim();
     const prompt = document.getElementById("prompt-input").value.trim();
+    // #35 optional per-session cap.
+    const capEl = document.getElementById("cap-input");
+    const cost_cap_usd = capEl ? (parseFloat(capEl.value) || 0) : 0;
     if (!cwd) { toast.error("cwd is required"); return; }
-    const res = await fetch("/api/agents", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({cwd, prompt}) });
+    const res = await fetch("/api/agents", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({cwd, prompt, cost_cap_usd}),
+    });
     if (!res.ok) { toast.error("Spawn failed: " + await res.text()); return; }
     document.getElementById("modal").classList.remove("show");
   };

@@ -19,9 +19,15 @@ function renderTermPanel(mountTerminal) {
   document.getElementById("d-name").textContent = agentName(a);
   document.getElementById("d-cwd").textContent = a.cwd;
   const status = a.status || "idle";
-  document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace("_", " ")) + '</span>';
+  document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace(/_/g, " ")) + '</span>';
   const task = a.currentTask || a.prompt || "";
   document.getElementById("d-task").textContent = task ? "▸ " + task : "";
+
+  // #35 Resume-anyway button: shown next to Kill when paused_over_budget.
+  const resumeBtn = document.getElementById("d-resume");
+  if (resumeBtn) {
+    resumeBtn.style.display = status === "paused_over_budget" ? "" : "none";
+  }
 
   if (mountTerminal) mountTerminalFor(a.id);
   requestAnimationFrame(() => { fitTerminalNow(); });
@@ -294,6 +300,25 @@ function bootTerminal() {
   });
 
   document.getElementById("d-copy").onclick = () => openOutputModal();
+
+  // #35 Resume-anyway: POST /api/agents/{id}/resume; SIGCONTs the process
+  // and clears the per-session cap so it can continue.
+  const resumeBtn = document.getElementById("d-resume");
+  if (resumeBtn) {
+    resumeBtn.onclick = async () => {
+      if (!selectedId) return;
+      resumeBtn.disabled = true;
+      try {
+        const res = await fetch("/api/agents/" + selectedId + "/resume", { method: "POST" });
+        if (!res.ok) toast.error("Resume failed: " + res.status + " " + (await res.text()));
+        else toast.success("Resumed");
+      } catch (err) {
+        toast.error("Resume failed: " + err.message);
+      } finally {
+        setTimeout(() => { resumeBtn.disabled = false; }, 400);
+      }
+    };
+  }
   document.getElementById("output-close").onclick = () => document.getElementById("output-modal").classList.remove("show");
   // Esc closes the output modal from anywhere (matches the sa-modal UX).
   document.addEventListener("keydown", (ev) => {

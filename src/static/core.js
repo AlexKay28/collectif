@@ -165,7 +165,7 @@ function armConfirmButton(btn, opts) {
 // rebuilt every section synchronously. Split into per-section renderers and
 // coalesce dirty sections into a single rAF so bursts of WS messages produce
 // exactly one paint. `scheduleRender('all')` invalidates every section.
-const SECTIONS = ["stats", "sidebar", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term"];
+const SECTIONS = ["stats", "sidebar", "pending", "trends", "tokens", "tokensByAgent", "feed", "toolUsage", "term", "budget"];
 const dirty = new Set();
 let rafPending = false;
 function scheduleRender(section) {
@@ -190,6 +190,7 @@ function flushRender() {
   if (now.has("feed"))          renderFeed();
   if (now.has("toolUsage"))     renderToolUsage();
   if (now.has("term"))          renderTermPanel(false);
+  if (now.has("budget"))        renderBudgetStrip();
 }
 
 // ─── Trend sampling + sparkline drawing ─────────
