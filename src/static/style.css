@@ -98,6 +98,29 @@ button.confirming:hover:not(:disabled) { background: #ff6b64; border-color: #ff6
 .status-pill.error     { color: var(--error); }
 .status-pill.stopped   { color: var(--stopped); }
 .status-pill.starting  { color: var(--accent); }
+/* #37 PR-ready — a positive terminal state, not an alert. Uses the same
+   family as .running but muted (no pulse), so at-a-glance the eye reads
+   "green = good, done." */
+.status-pill.review_ready .dot { background: #56d364; }
+.status-pill.review_ready { color: #56d364; }
+.agent-card.status-review-ready { box-shadow: inset 3px 0 0 #56d364; background: rgba(63, 185, 80, 0.04); }
+.agent-card.status-review-ready.selected { background: rgba(63, 185, 80, 0.10); }
+.review-badge { background: #238636; color: #fff; font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* Review queue rows on Overview */
+.review-queue { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.review-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid #56d364; border-radius: 6px; cursor: pointer; transition: background 0.08s; }
+.review-row:hover { background: #1f242c; }
+.review-row .avatar { width: 32px; height: 32px; }
+.review-row .rq-body { min-width: 0; }
+.review-row .rq-name { font-weight: 600; font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+.review-row .rq-age { color: var(--muted); font-size: 10.5px; font-weight: 500; }
+.review-row .rq-title { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.review-row .rq-btns { display: flex; gap: 6px; }
+.review-row .rq-btns button { padding: 5px 10px; font-size: 11.5px; }
+.review-row .rq-open { background: var(--panel); border-color: var(--border-hi); }
+.review-row .rq-done { background: #238636; border-color: #2ea043; color: #fff; font-weight: 600; }
+.review-row .rq-done:hover:not(:disabled) { background: #2ea043; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* ─── Detail pane ─────────────────────────────── */

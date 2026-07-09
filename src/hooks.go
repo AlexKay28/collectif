@@ -17,6 +17,7 @@ type hookPayload struct {
 	HookEventName  string         `json:"hook_event_name"`
 	ToolName       string         `json:"tool_name"`
 	ToolInput      map[string]any `json:"tool_input"`
+	ToolResponse   map[string]any `json:"tool_response"` // #37 PR-ready: PostToolUse response (stdout, exit_code)
 	TranscriptPath string         `json:"transcript_path"`
 	Message        string         `json:"message"`
 	Prompt         string         `json:"prompt"`
@@ -114,6 +115,11 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		}
 		s.appendActivity(ActivityEntry{Event: "PostToolUse", Tool: p.ToolName, Level: "info"})
 		s.setStatus("running", "✓ "+p.ToolName)
+		// #37 PR-ready detection (path A): tool-use signal — a Bash call to
+		// `gh pr create` that exited 0 marks the session as review_ready.
+		if p.ToolName == "Bash" {
+			handleBashPostToolUse(s, p.ToolInput, p.ToolResponse)
+		}
 
 	case "PostToolUseFailure":
 		s.appendActivity(ActivityEntry{Event: "PostToolUseFailure", Tool: p.ToolName, Level: "error"})

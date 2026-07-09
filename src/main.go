@@ -62,6 +62,7 @@ func main() {
 	mux.HandleFunc("/metrics", handleMetrics)
 
 	startPendingSweeper()
+	startPRPoller() // #37 PR-ready fallback detection
 
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)

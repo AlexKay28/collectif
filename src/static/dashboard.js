@@ -222,6 +222,81 @@ function renderToolUsage() {
     : toolEntries.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('');
 }
 
+// ─── #37 PR-ready: Review queue ──────────────────
+// Sessions in "review_ready" surface here for quick human triage. Two
+// buttons per row: Open PR (external link) and Mark reviewed (server
+// clears the flag, session moves to "stopped"). Oldest first so the
+// human works through them round-robin.
+function renderReviewQueue() {
+  const arr = Array.from(agents.values()).filter(a => a.status === "review_ready");
+  const head = document.getElementById("dash-review-head");
+  const container = document.getElementById("dash-review");
+  const count = document.getElementById("dash-review-count");
+  if (!container || !head) return;
+  if (arr.length === 0) {
+    head.style.display = "none";
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+  head.style.display = "";
+  container.style.display = "";
+  count.textContent = arr.length;
+  // Oldest first: sort by updatedAt ascending — that's when the PR
+  // flag was flipped on. Falls back to createdAt for stability.
+  arr.sort((a, b) => {
+    const at = a.updatedAt || a.createdAt || "";
+    const bt = b.updatedAt || b.createdAt || "";
+    return at.localeCompare(bt);
+  });
+  container.innerHTML = arr.map(a => {
+    const label = a.prTitle || a.prURL || "(PR opened)";
+    const age = humanAge(a.updatedAt || a.createdAt);
+    return (
+      '<div class="review-row" data-id="' + esc(a.id) + '">' +
+        '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="rq-body">' +
+          '<div class="rq-name">' + esc(agentName(a)) + '<span class="rq-age">· ' + esc(age) + '</span></div>' +
+          '<div class="rq-title" title="' + esc(a.prURL || "") + '">' + esc(label) + '</div>' +
+        '</div>' +
+        '<div class="rq-btns">' +
+          '<button class="rq-open" data-url="' + esc(a.prURL || "") + '">Open PR</button>' +
+          '<button class="rq-done" data-id="' + esc(a.id) + '">Mark reviewed</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+  // Wire click handlers.
+  container.querySelectorAll(".review-row").forEach(r => {
+    r.onclick = (ev) => {
+      if (ev.target.closest("button")) return;
+      selectAgent(r.dataset.id);
+    };
+  });
+  container.querySelectorAll(".rq-open").forEach(btn => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const url = btn.dataset.url;
+      if (url) window.open(url, "_blank");
+    };
+  });
+  container.querySelectorAll(".rq-done").forEach(btn => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/agents/" + id + "/reviewed", { method: "POST" });
+        if (!res.ok) toast.error("Mark reviewed failed: " + (await res.text()));
+      } catch (err) {
+        toast.error("Mark reviewed failed: " + err.message);
+      } finally {
+        setTimeout(() => { btn.disabled = false; }, 400);
+      }
+    };
+  });
+}
+
 function renderTrends() {
   drawSparkline("chart-active", trend.map(s => s.active), { yMin: 0 });
   document.getElementById("chart-active-val").textContent = trend.length ? trend[trend.length - 1].active : "0";
@@ -359,7 +434,9 @@ function renderSidebar() {
     const c = document.createElement("div");
     c.className = "agent-card " + (a.status || "idle")
       + (selectedId === a.id ? " selected" : "")
-      + (a.pending ? " pending" : "");
+      + (a.pending ? " pending" : "")
+      // #37 PR-ready sidebar accent — positive terminal state, not an alert.
+      + (a.status === "review_ready" ? " status-review-ready" : "");
     c.dataset.id = a.id;
     c.draggable = true;
     const task = a.currentTask || a.prompt || "";
@@ -372,6 +449,7 @@ function renderSidebar() {
         '<div class="card-body">' +
           '<div class="card-name"><span class="name">' + esc(agentName(a)) + '</span>' +
           (a.pending ? '<span class="pending-badge">Action</span>' : '') +
+          (a.status === "review_ready" ? '<span class="review-badge">PR</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
           '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
           '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span></div>' +

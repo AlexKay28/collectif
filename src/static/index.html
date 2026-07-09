@@ -81,6 +81,12 @@
             </div>
           </div>
           <div class="dash-right" id="dash-right-metrics">
+            <!-- #37 PR-ready: Review queue — sits between "Awaiting input" (in
+                 the hero strip / feed) and "Trends". Hidden until at least one
+                 session is review_ready. -->
+            <h3 id="dash-review-head" style="display:none">Ready for review <span class="count" id="dash-review-count">0</span></h3>
+            <div class="review-queue" id="dash-review" style="display:none"></div>
+
             <h3>Trends <span class="count" id="dash-trend-window">last 10m</span></h3>
             <div class="chart-stack">
               <div class="chart-card active">
