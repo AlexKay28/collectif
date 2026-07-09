@@ -26,8 +26,16 @@ function connectDashboardWS() {
     if (msg.type === "snapshot") {
       agents.clear();
       for (const a of msg.agents) agents.set(a.id, a);
+      // #36 Seed last-seen status on snapshot so we don't ping the user about
+      // agents that were already in a notable state before we connected.
+      if (window.collectifNotify) {
+        for (const a of msg.agents) window.collectifNotify.seed(a);
+      }
     } else if (msg.type === "upsert") {
       agents.set(msg.agent.id, msg.agent);
+      // #36 Fire a browser notification if this transition is notable and the
+      // user has enabled notifications for this agent.
+      if (window.collectifNotify) window.collectifNotify.maybeNotify(msg.agent);
     } else if (msg.type === "remove") {
       agents.delete(msg.id);
       if (selectedId === msg.id) {

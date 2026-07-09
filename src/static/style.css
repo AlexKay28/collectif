@@ -347,6 +347,19 @@ header h1:hover { color: var(--accent); }
   color: #fff; background: var(--error); border-color: var(--error);
   opacity: 1; letter-spacing: 0.03em;
 }
+/* #36 quiet-mode toggle — sits left of the kill button. */
+.agent-card { padding-right: 64px; }
+.agent-card .quiet-btn {
+  position: absolute; top: 10px; right: 36px;
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 5px; background: transparent; border: 1px solid transparent;
+  color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+  opacity: 0.55; transition: opacity 0.1s, background 0.1s, border-color 0.1s;
+  -webkit-user-drag: none;
+}
+.agent-card:hover .quiet-btn { opacity: 1; }
+.agent-card .quiet-btn:hover { background: var(--panel-2); border-color: var(--border); }
+
 .agent-card.dragging { opacity: 0.4; }
 .agent-card.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
 .agent-card.drop-after  { box-shadow: inset 0 -3px 0 var(--accent); }

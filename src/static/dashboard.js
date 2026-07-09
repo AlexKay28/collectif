@@ -442,7 +442,13 @@ function renderSidebar() {
     const task = a.currentTask || a.prompt || "";
     const activityText = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
     const tokTotal = (a.inputTokens || 0) + (a.outputTokens || 0);
+    // #36 Per-agent quiet toggle — 🔕 when notifications are enabled, 🔔 when
+    // muted. Tooltips explain the action rather than the current state.
+    const quiet = window.collectifNotify && window.collectifNotify.isQuiet(a.id);
+    const quietIcon  = quiet ? "🔔" : "🔕";
+    const quietTitle = quiet ? "Un-mute notifications for this agent" : "Mute notifications for this agent";
     c.innerHTML = (
+      '<button class="quiet-btn" draggable="false" title="' + esc(quietTitle) + '">' + quietIcon + '</button>' +
       '<button class="kill-btn" draggable="false" title="Kill agent">×</button>' +
       '<div class="card-head">' +
         '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
@@ -459,11 +465,26 @@ function renderSidebar() {
         '</div>' +
       '</div>'
     );
-    // Card click → select (but only if the click didn't originate on kill).
+    // Card click → select (but only if the click didn't originate on kill
+    // or the quiet-toggle).
     c.addEventListener("click", (ev) => {
       if (ev.target.closest(".kill-btn")) return;
+      if (ev.target.closest(".quiet-btn")) return;
       selectAgent(a.id);
     });
+    // #36 Quiet-mode toggle.
+    const quietBtn = c.querySelector(".quiet-btn");
+    if (quietBtn && window.collectifNotify) {
+      quietBtn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+      quietBtn.addEventListener("dragstart", (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+      quietBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const nowQuiet = !window.collectifNotify.isQuiet(a.id);
+        window.collectifNotify.setQuiet(a.id, nowQuiet);
+        toast.info(nowQuiet ? "Muted " + agentName(a) : "Unmuted " + agentName(a));
+        scheduleRender("sidebar");
+      });
+    }
     const killBtn = c.querySelector(".kill-btn");
     // Belt-and-braces: block mousedown/pointerdown too so no drag can start
     // from the button, no matter how the browser interprets the gesture.

@@ -15,6 +15,9 @@ import (
 type Config struct {
 	// #35 hourly dollar cap across all sessions. 0 = no cap.
 	CostCapHourUSD float64 `json:"cost_cap_hour_usd"`
+	// #36 outbound notification webhook — POSTed on the same status
+	// transitions the browser gets notified about. Empty = disabled.
+	NotifyWebhookURL string `json:"notify_webhook_url"`
 }
 
 var currentConfig atomic.Pointer[Config]

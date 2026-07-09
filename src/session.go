@@ -589,6 +589,7 @@ func allSessionsJSON() []map[string]any {
 // agent JSON to dashboard subscribers so the UI always has the richest state.
 func (s *Session) setStatus(status, activity string) {
 	s.mu.Lock()
+	prev := s.Status
 	s.Status = status
 	if activity != "" {
 		s.LastActivity = activity
@@ -599,6 +600,11 @@ func (s *Session) setStatus(status, activity string) {
 		"type":  "upsert",
 		"agent": s.toJSON(),
 	})
+	// #36 Fire outbound webhook + let the "already notified" cache decay so
+	// that a session bouncing between running and waiting_input re-notifies
+	// on the next waiting_input event.
+	notifyReset(s.ID, prev)
+	notifyStatusTransition(s, status, activity)
 }
 
 // touch broadcasts a fresh snapshot without changing status — used when the
