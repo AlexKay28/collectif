@@ -140,6 +140,16 @@ type Session struct {
 	LastPreToolInput map[string]any
 	LastPreToolAt    time.Time
 
+	// ── #37 PR-ready ──────────────────────────────────────────────────
+	// Populated when the session opens a GitHub PR (either via a
+	// `gh pr create` PostToolUse hook or via the git-state poller). When
+	// PRURL is non-empty and Status == "review_ready" the dashboard's
+	// Review queue surfaces this session. Cleared by the /reviewed
+	// endpoint. See src/prdetect.go.
+	PRURL   string
+	PRTitle string
+	// ──────────────────────────────────────────────────────────────────
+
 	// Transcript watcher bookkeeping.
 	transcriptOffset int64
 	watching         bool
@@ -495,6 +505,9 @@ func (s *Session) toJSON() map[string]any {
 		"costCapUSD":          s.CostCapUSD, // #35
 		"createdAt":           s.CreatedAt.Format(time.RFC3339),
 		"updatedAt":           s.UpdatedAt.Format(time.RFC3339),
+		// #37 PR-ready
+		"prURL":   s.PRURL,
+		"prTitle": s.PRTitle,
 	}
 }
 

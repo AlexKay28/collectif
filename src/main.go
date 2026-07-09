@@ -67,6 +67,7 @@ func main() {
 
 	startPendingSweeper()
 	startHourlyCostBroadcaster() // #35
+	startPRPoller()              // #37 PR-ready fallback detection
 
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)

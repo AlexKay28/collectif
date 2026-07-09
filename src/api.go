@@ -144,6 +144,9 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			// #35 resume from paused_over_budget: SIGCONT + clear the
 			// per-session cap so it doesn't immediately re-trip.
 			handleAgentResume(w, r, s)
+		case "reviewed":
+			// #37 PR-ready: clear the review flag; agent leaves the queue.
+			handleAgentReviewed(w, r, s)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}
@@ -293,6 +296,22 @@ func handleAgentResume(w http.ResponseWriter, r *http.Request, s *Session) {
 		return
 	}
 	resumeFromPause(s)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAgentReviewed (POST /api/agents/{id}/reviewed) clears the PR-ready
+// flag and moves the session to "stopped". Used by the dashboard Review
+// queue's "Mark reviewed" button once a human has looked at the PR. #37.
+func handleAgentReviewed(w http.ResponseWriter, r *http.Request, s *Session) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	s.PRURL = ""
+	s.PRTitle = ""
+	s.mu.Unlock()
+	s.setStatus("stopped", "review complete")
 	w.WriteHeader(http.StatusNoContent)
 }
 

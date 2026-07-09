@@ -83,6 +83,12 @@
             </div>
           </div>
           <div class="dash-right" id="dash-right-metrics">
+            <!-- #37 PR-ready: Review queue — hidden until at least one session
+                 is review_ready. Sits above the Budget strip because it's the
+                 more actionable "your attention is needed" surface. -->
+            <h3 id="dash-review-head" style="display:none">Ready for review <span class="count" id="dash-review-count">0</span></h3>
+            <div class="review-queue" id="dash-review" style="display:none"></div>
+
             <!-- #35 Budget strip — hourly total against the configured cap.
                  Rendered by renderBudgetStrip() in dashboard.js. -->
             <h3>Budget <span class="count">last hour</span></h3>
