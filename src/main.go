@@ -50,11 +50,15 @@ func main() {
 		log.Fatalf("embed: %v", err)
 	}
 
+	// #35 load config once at boot; publishes into the atomic pointer.
+	initConfig()
+
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	mux.HandleFunc("/api/agents", handleAgents)
 	mux.HandleFunc("/api/agents/", handleAgentByID)
 	mux.HandleFunc("/api/cwd/check", handleCwdCheck)
+	mux.HandleFunc("/api/config", handleConfig) // #35
 	mux.HandleFunc("/api/hooks", handleHook)
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
@@ -62,6 +66,7 @@ func main() {
 	mux.HandleFunc("/metrics", handleMetrics)
 
 	startPendingSweeper()
+	startHourlyCostBroadcaster() // #35
 
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)

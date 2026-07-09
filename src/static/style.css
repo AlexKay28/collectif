@@ -555,3 +555,27 @@ header h1:hover { color: var(--accent); }
   user-select: text; -webkit-user-select: text;
   cursor: text;
 }
+
+/* ─── #35 Budget strip ─────────────────────────── */
+.budget-strip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.budget-head { display: flex; align-items: baseline; gap: 8px; }
+.budget-val { font-size: 18px; font-weight: 700; font-family: ui-monospace, monospace; }
+.budget-cap { color: var(--muted); font-size: 12px; }
+.budget-bar { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; height: 8px; margin-top: 8px; overflow: hidden; }
+.budget-fill { height: 100%; transition: width 0.3s ease-out, background 0.2s; }
+.budget-fill.ok   { background: var(--running); }
+.budget-fill.warn { background: var(--waiting); }
+.budget-fill.over { background: var(--error); }
+.budget-sub { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+/* Sidebar tile briefly flashed when a cost_warning event arrives. */
+.agent-card.cost-warned { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting) inset; }
+
+/* paused_over_budget sidebar tile — distinct yellow/orange tint. */
+.agent-card.paused_over_budget { border-color: #d29922; }
+.agent-card.paused_over_budget .status-pill { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+.status-pill.paused_over_budget { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+.status-pill.paused_over_budget .dot { background: #d29922; }
+
+#d-resume { background: #d29922; border-color: #d29922; color: #0d1117; font-weight: 600; }
+#d-resume:hover:not(:disabled) { background: #f0b429; border-color: #f0b429; }

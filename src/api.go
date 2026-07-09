@@ -35,6 +35,8 @@ const maxBodyBytes = 1 << 20
 type spawnReq struct {
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt"`
+	// #35 per-session USD cap. Optional; 0 = no cap.
+	CostCapUSD float64 `json:"cost_cap_usd"`
 }
 
 func handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -55,11 +57,23 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// #35 hourly cap check — refuse to spawn if the last hour of spend
+		// already exceeds the configured hourly cap.
+		if hourCap := GetConfig().CostCapHourUSD; hourCap > 0 {
+			if total := hourlyCostTotal(); total >= hourCap {
+				http.Error(w, "hourly cost cap exceeded — refusing to spawn new agent", http.StatusTooManyRequests)
+				return
+			}
+		}
+
 		agentID := uuid.NewString()
 		sessionID := uuid.NewString()
 		hookTok := uuid.NewString()
 		s := newSession(agentID, sessionID, req.Cwd, req.Prompt)
 		s.HookToken = hookTok
+		if req.CostCapUSD > 0 {
+			s.CostCapUSD = req.CostCapUSD // #35
+		}
 
 		settingsDir, settingsFile, err := writeHookSettings(hookURL(hookBind, hookPort, hookTok))
 		if err != nil {
@@ -126,6 +140,10 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 			handleAgentAnswer(w, r, s, []string{"no\r"}, []string{"\x1b"})
 		case "resize":
 			handleAgentResize(w, r, s)
+		case "resume":
+			// #35 resume from paused_over_budget: SIGCONT + clear the
+			// per-session cap so it doesn't immediately re-trip.
+			handleAgentResume(w, r, s)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}
@@ -256,6 +274,25 @@ func handleAgentResize(w http.ResponseWriter, r *http.Request, s *Session) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAgentResume implements #35 POST /api/agents/{id}/resume.
+// SIGCONTs the process group and clears the per-session cap so the
+// agent can continue without immediately re-tripping the cap.
+func handleAgentResume(w http.ResponseWriter, r *http.Request, s *Session) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	status := s.Status
+	s.mu.Unlock()
+	if status != statusPausedOverBudget {
+		http.Error(w, "session is not paused over budget", http.StatusConflict)
+		return
+	}
+	resumeFromPause(s)
 	w.WriteHeader(http.StatusNoContent)
 }
 

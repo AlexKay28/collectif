@@ -117,6 +117,11 @@ type Session struct {
 	CacheCreationTokens int64
 	MessageCount        int
 
+	// #35 cost cap — per-session USD budget. 0 = no cap.
+	// Kept adjacent to token counters so future budget-related fields
+	// stay grouped. Read/written under s.mu like the other counters.
+	CostCapUSD float64
+
 	// Pending permission prompt, if any. Cleared on next non-approval event.
 	Pending *ApprovalRequest
 
@@ -487,6 +492,7 @@ func (s *Session) toJSON() map[string]any {
 		"cacheReadTokens":     s.CacheReadTokens,
 		"cacheCreationTokens": s.CacheCreationTokens,
 		"messageCount":        s.MessageCount,
+		"costCapUSD":          s.CostCapUSD, // #35
 		"createdAt":           s.CreatedAt.Format(time.RFC3339),
 		"updatedAt":           s.UpdatedAt.Format(time.RFC3339),
 	}

@@ -159,6 +159,10 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		s.touch()
 	}
 
+	// #35: enforce per-session cost cap at the tail of every hook so
+	// state (token counts populated by the transcript watcher) is fresh.
+	enforceCostCaps(s)
+
 	w.WriteHeader(http.StatusOK)
 }
 

@@ -359,7 +359,8 @@ function renderSidebar() {
     const c = document.createElement("div");
     c.className = "agent-card " + (a.status || "idle")
       + (selectedId === a.id ? " selected" : "")
-      + (a.pending ? " pending" : "");
+      + (a.pending ? " pending" : "")
+      + (warnedAgents.has(a.id) ? " cost-warned" : ""); // #35
     c.dataset.id = a.id;
     c.draggable = true;
     const task = a.currentTask || a.prompt || "";
@@ -463,4 +464,78 @@ function selectAgent(id) {
   renderSidebar();
   renderTermPanel(true);
   renderSendPanel();
+}
+
+// ─── #35 Budget strip ──────────────────────────────────────
+// The server sends `hourly_cost` events every 30s and a `cost_warning` event
+// when a session crosses 80% (or 100%) of its per-session cap. The strip
+// shows the rolling-hour total against the hourly cap from /api/config, and
+// a small readout of session counts.
+let currentHourlyCost = 0;
+let currentHourlySessions = 0;
+let currentHourlyOverCap = 0;
+let currentHourlyCap = 0;          // from /api/config.cost_cap_hour_usd
+let warnedAgents = new Set();      // ids that flashed recently
+
+function handleHourlyCost(msg) {
+  currentHourlyCost = msg.cost || 0;
+  currentHourlySessions = msg.sessions || 0;
+  currentHourlyOverCap = msg.overCap || 0;
+  scheduleRender("budget");
+}
+
+function handleCostWarning(msg) {
+  const a = agents.get(msg.id);
+  const name = a ? agentName(a) : msg.id;
+  const pct = Math.round((msg.pct || 0) * 100);
+  toast.error(name + " at " + pct + "% of " + fmtCost(msg.cap || 0) + " cap");
+  warnedAgents.add(msg.id);
+  scheduleRender("sidebar");
+  // Auto-clear the highlight after 30s so it doesn't linger forever.
+  setTimeout(() => {
+    warnedAgents.delete(msg.id);
+    scheduleRender("sidebar");
+  }, 30000);
+}
+
+async function refreshBudgetConfig() {
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) return;
+    const c = await res.json();
+    currentHourlyCap = c && c.cost_cap_hour_usd ? c.cost_cap_hour_usd : 0;
+    scheduleRender("budget");
+  } catch (_) { /* silent — best-effort */ }
+}
+
+function renderBudgetStrip() {
+  const el = document.getElementById("dash-budget");
+  if (!el) return;
+  const cap = currentHourlyCap;
+  const cost = currentHourlyCost;
+  const pct = cap > 0 ? Math.min(100, Math.round((cost / cap) * 100)) : 0;
+  const barCls = cap > 0
+    ? (cost >= cap ? "over" : (cost >= 0.8 * cap ? "warn" : "ok"))
+    : "ok";
+  const capLabel = cap > 0 ? " / " + fmtCost(cap) : " (no hourly cap set)";
+  el.innerHTML = (
+    '<div class="budget-head">' +
+      '<span class="budget-val">' + esc(fmtCost(cost)) + '</span>' +
+      '<span class="budget-cap">' + esc(capLabel) + '</span>' +
+    '</div>' +
+    (cap > 0
+      ? '<div class="budget-bar"><div class="budget-fill ' + barCls + '" style="width:' + pct + '%"></div></div>'
+      : '') +
+    '<div class="budget-sub">' + currentHourlySessions +
+      ' session' + (currentHourlySessions === 1 ? '' : 's') +
+      ' this hour · ' + currentHourlyOverCap + ' over cap</div>'
+  );
+}
+
+// Fetch the hourly cap once at boot so the strip renders promptly. Scripts
+// are placed at the end of body, so the DOM is already parsed by the time
+// this runs — call directly, defer for a tick so auth.js has published fetch.
+// Skip when the auth screen is showing (getElementById would be null anyway).
+if (typeof window !== "undefined" && !window.AGENTCTL_NO_TOKEN) {
+  setTimeout(() => { try { refreshBudgetConfig(); } catch (_) {} }, 0);
 }

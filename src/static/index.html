@@ -55,6 +55,8 @@
                 </div>
                 <div class="actions">
                   <button id="d-copy" title="Open copy dialog (Ctrl+Shift+C)">Copy…</button>
+                  <!-- #35 shown only when status === paused_over_budget -->
+                  <button id="d-resume" style="display:none" title="Resume the paused agent (clears its cost cap)">Resume anyway</button>
                   <button id="d-kill" class="ghost">Kill</button>
                 </div>
               </div>
@@ -81,6 +83,11 @@
             </div>
           </div>
           <div class="dash-right" id="dash-right-metrics">
+            <!-- #35 Budget strip — hourly total against the configured cap.
+                 Rendered by renderBudgetStrip() in dashboard.js. -->
+            <h3>Budget <span class="count">last hour</span></h3>
+            <div class="budget-strip" id="dash-budget"></div>
+
             <h3>Trends <span class="count" id="dash-trend-window">last 10m</span></h3>
             <div class="chart-stack">
               <div class="chart-card active">
@@ -121,6 +128,9 @@
     </label>
     <label>Initial prompt (optional)
       <input id="prompt-input" placeholder="e.g. add a health-check endpoint" />
+    </label>
+    <label>Cost cap (USD, optional)
+      <input id="cap-input" type="number" step="0.01" placeholder="e.g. 5.00" />
     </label>
     <div class="actions">
       <button id="cancel-btn">Cancel</button>
