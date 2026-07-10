@@ -673,13 +673,6 @@ header h1:hover { color: var(--accent); }
 
 .compose-strip .row { display: flex; align-items: center; gap: 6px; }
 .compose-strip .row button { flex-shrink: 0; }
-.compose-strip .row #compose-input {
-  flex: 1 1 auto; min-width: 0;
-  padding: 6px 10px; border-radius: 6px;
-  background: var(--panel-2); border: 1px solid var(--border);
-  color: var(--text); font-family: inherit; font-size: 12.5px;
-}
-.compose-strip .row #compose-input:focus { border-color: var(--accent); outline: none; }
 
 /* Drag-and-drop over the terminal panel — subtle overlay hint. */
 .term-panel.drop-active,

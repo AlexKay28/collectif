@@ -70,15 +70,15 @@ function markAttachmentStatus(sessionId, paths, status) {
   if (touched) scheduleRender("term");
 }
 
-async function sendComposedMessage(text) {
+async function sendComposedMessage() {
   if (!selectedId) return;
   const q = queueFor(selectedId);
   const paths = q.filter(c => c.status === "queued").map(c => c.path);
-  if (paths.length === 0 && !text.trim()) return;
+  if (paths.length === 0) return;
   const res = await fetch("/api/agents/" + selectedId + "/send", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, paths }),
+    body: JSON.stringify({ text: "", paths }),
   });
   if (!res.ok) {
     toast.error("Send failed: " + await res.text());
@@ -88,8 +88,6 @@ async function sendComposedMessage(text) {
   // which will land the same result via the WS dispatch.
   for (const c of q) if (paths.includes(c.path)) c.status = "sent";
   scheduleRender("term");
-  const box = document.getElementById("compose-input");
-  if (box) box.value = "";
 }
 
 // Render the chip strip + composer inside the terminal panel head. Called
@@ -211,15 +209,8 @@ function bootAttach() {
 
   // Send.
   const sendBtn = document.getElementById("compose-send");
-  const input = document.getElementById("compose-input");
-  if (sendBtn && input) {
-    sendBtn.addEventListener("click", () => sendComposedMessage(input.value));
-    input.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !ev.shiftKey) {
-        ev.preventDefault();
-        sendComposedMessage(input.value);
-      }
-    });
+  if (sendBtn) {
+    sendBtn.addEventListener("click", () => sendComposedMessage());
   }
 }
 
