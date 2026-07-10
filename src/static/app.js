@@ -48,6 +48,14 @@ function connectDashboardWS() {
     } else if (msg.type === "cost_warning") {
       // #35 toast + highlight the sidebar tile.
       handleCostWarning(msg);
+    } else if (msg.type === "attachment_sent" && window.collectifAttach) {
+      window.collectifAttach.markAttachmentStatus(msg.id, msg.paths || [], "sent");
+    } else if (msg.type === "attachment_seen" && window.collectifAttach) {
+      window.collectifAttach.markAttachmentStatus(msg.id, msg.paths || [], "seen");
+      if (msg.id === selectedId) toast.success("Attachment delivered ✓");
+    } else if (msg.type === "attachment_stale" && window.collectifAttach) {
+      window.collectifAttach.markAttachmentStatus(msg.id, msg.paths || [], "stale");
+      if (msg.id === selectedId) toast.error("Attachment not read within 15s — retry?");
     }
     scheduleRender("all");
   };
@@ -158,6 +166,7 @@ function boot() {
 
   bootTerminal();
   bootTeam();
+  bootAttach();
 
   connectDashboardWS();
 

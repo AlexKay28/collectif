@@ -147,6 +147,14 @@ func handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		case "reviewed":
 			// #37 PR-ready: clear the review flag; agent leaves the queue.
 			handleAgentReviewed(w, r, s)
+		case "attach":
+			// #39 image attachment upload — returns the absolute path
+			// that the client will inject via @<path> at send time.
+			handleAttach(w, r, s)
+		case "send":
+			// #39 composed send: @paths + text → PTY. Marks attachments
+			// as sent so the stale watcher can flag delivery failures.
+			handleAgentSend(w, r, s)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}

@@ -120,6 +120,10 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		if p.ToolName == "Bash" {
 			handleBashPostToolUse(s, p.ToolInput, p.ToolResponse)
 		}
+		// #39 attachment delivery verification — any tool that touches a
+		// path (Read, Bash, Grep, …) can confirm Claude actually opened
+		// the file we handed it.
+		attachmentSeen(s, p.ToolInput)
 
 	case "PostToolUseFailure":
 		s.appendActivity(ActivityEntry{Event: "PostToolUseFailure", Tool: p.ToolName, Level: "error"})

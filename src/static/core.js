@@ -190,7 +190,7 @@ function flushRender() {
   if (now.has("tokensByAgent")) renderTokensByAgent();
   if (now.has("feed"))          renderFeed();
   if (now.has("toolUsage"))     renderToolUsage();
-  if (now.has("term"))          renderTermPanel(false);
+  if (now.has("term"))          { renderTermPanel(false); renderAttachmentStrip(); }
   if (now.has("budget"))        renderBudgetStrip();
 }
 

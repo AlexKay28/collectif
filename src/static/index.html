@@ -63,6 +63,19 @@
               <div class="term-body" id="term-body" style="display:none">
                 <div id="term-container"></div>
               </div>
+              <!-- #39 attachment composer — chip strip + text input + send.
+                   Hidden until an agent is selected. Chips show delivery
+                   status: queued(blue)/sent(amber)/seen(green)/stale(red). -->
+              <div id="compose-strip" class="compose-strip" style="display:none">
+                <div class="chips"></div>
+                <div class="row">
+                  <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
+                  <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
+                  <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
+                  <input id="compose-input" placeholder="Message (Enter to send, Shift+Enter for newline)" autocomplete="off">
+                  <button id="compose-send" class="primary">Send</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -185,6 +198,34 @@
   </div>
 </div>
 
+<!-- #39 drawing pad modal — canvas + minimal toolbar. -->
+<div id="draw-modal">
+  <div class="box draw-box">
+    <div class="head">
+      <h3>Drawing pad</h3>
+      <span class="spacer"></span>
+      <span class="hint">Sketch a UI, arrow, or note — then Save & attach</span>
+      <button id="draw-cancel">Cancel</button>
+      <button class="primary" id="draw-save">Save &amp; attach</button>
+    </div>
+    <div class="draw-toolbar">
+      <span class="draw-swatches">
+        <button class="draw-color" data-color="#e6edf3" title="White" style="background:#e6edf3"></button>
+        <button class="draw-color" data-color="#f85149" title="Red"   style="background:#f85149"></button>
+        <button class="draw-color" data-color="#3fb950" title="Green" style="background:#3fb950"></button>
+        <button class="draw-color" data-color="#58a6ff" title="Blue"  style="background:#58a6ff"></button>
+        <button class="draw-color" data-color="#f0b429" title="Amber" style="background:#f0b429"></button>
+      </span>
+      <button id="draw-eraser" title="Eraser">Eraser</button>
+      <label class="draw-size-lab">Size <input id="draw-size" type="range" min="1" max="20" value="4"><span id="draw-size-val">4px</span></label>
+      <span class="spacer"></span>
+      <button id="draw-undo" title="Undo last stroke">Undo</button>
+      <button id="draw-clear" title="Clear all">Clear</button>
+    </div>
+    <canvas id="draw-canvas"></canvas>
+  </div>
+</div>
+
 <div id="output-modal">
   <div class="box">
     <div class="head">
@@ -209,6 +250,8 @@
 <script src="dashboard.js"></script>
 <script src="terminal.js"></script>
 <script src="team.js"></script>
+<script src="attach.js"></script>
+<script src="draw.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

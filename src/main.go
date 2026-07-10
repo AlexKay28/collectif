@@ -66,8 +66,9 @@ func main() {
 	mux.HandleFunc("/metrics", handleMetrics)
 
 	startPendingSweeper()
-	startHourlyCostBroadcaster() // #35
-	startPRPoller()              // #37 PR-ready fallback detection
+	startHourlyCostBroadcaster()   // #35
+	startPRPoller()                // #37 PR-ready fallback detection
+	startAttachmentStaleWatcher()  // #39 flag undelivered attachments
 
 	addr := *bind + ":" + *port
 	log.Printf("collectif listening on http://%s", addr)

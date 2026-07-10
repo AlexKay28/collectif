@@ -538,6 +538,8 @@ func removeSession(id string) {
 		if s.HookToken != "" {
 			delete(hookToAgent, s.HookToken)
 		}
+		// #39 attachments — best-effort remove files + map entries.
+		cleanupAttachments(id)
 		if s.SettingsDir != "" {
 			_ = os.RemoveAll(s.SettingsDir)
 		}

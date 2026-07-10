@@ -615,3 +615,90 @@ header h1:hover { color: var(--accent); }
 
 #d-resume { background: #d29922; border-color: #d29922; color: #0d1117; font-weight: 600; }
 #d-resume:hover:not(:disabled) { background: #f0b429; border-color: #f0b429; }
+
+/* ─── #39 Attachment composer ────────────────── */
+.compose-strip {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel);
+}
+.compose-strip .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.compose-strip .chips:empty { display: none; }
+.compose-strip .chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 6px 3px 3px; border-radius: 12px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-size: 11px;
+}
+.compose-strip .chip .thumb {
+  width: 22px; height: 22px; border-radius: 3px; object-fit: cover; background: #000;
+}
+.compose-strip .chip .name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compose-strip .chip .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+}
+.compose-strip .chip .dot.queued { background: #58a6ff; }
+.compose-strip .chip .dot.sent   { background: #f0b429; animation: chip-pulse 1.4s ease-in-out infinite; }
+.compose-strip .chip .dot.seen   { background: #3fb950; }
+.compose-strip .chip .dot.stale  { background: #f85149; }
+.compose-strip .chip.status-seen  { border-color: rgba(63,185,80,0.5); }
+.compose-strip .chip.status-stale { border-color: rgba(248,81,73,0.5); }
+.compose-strip .chip .rm {
+  width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  background: transparent; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
+.compose-strip .chip .rm:hover { color: var(--error); }
+@keyframes chip-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.compose-strip .row { display: flex; align-items: center; gap: 6px; }
+.compose-strip .row button { flex-shrink: 0; }
+.compose-strip .row #compose-input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 6px 10px; border-radius: 6px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--text); font-family: inherit; font-size: 12.5px;
+}
+.compose-strip .row #compose-input:focus { border-color: var(--accent); outline: none; }
+
+/* Drag-and-drop over the terminal panel — subtle overlay hint. */
+.term-panel.drop-active,
+#term-body.drop-active {
+  outline: 2px dashed var(--accent); outline-offset: -6px;
+}
+
+/* ─── #39 Drawing pad modal ──────────────────── */
+#draw-modal {
+  display: none; position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.7); align-items: center; justify-content: center;
+}
+#draw-modal.show { display: flex; }
+#draw-modal .draw-box {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; width: min(880px, 96vw); box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+#draw-modal .head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+#draw-modal .head .spacer { flex: 1 1 auto; }
+#draw-modal .head .hint { color: var(--muted); font-size: 11px; font-style: italic; }
+.draw-toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px; margin-bottom: 8px;
+  background: var(--panel-2); border-radius: 6px;
+  font-size: 12px;
+}
+.draw-toolbar .spacer { flex: 1 1 auto; }
+.draw-swatches { display: inline-flex; gap: 4px; }
+.draw-color {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer;
+  padding: 0;
+}
+.draw-color.active { border-color: var(--text); box-shadow: 0 0 0 1px #000 inset; }
+#draw-eraser.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.draw-size-lab { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.draw-size-lab input { width: 90px; }
+#draw-canvas {
+  display: block; background: #0d1117; border-radius: 6px;
+  width: 100%; height: auto; touch-action: none;
+  cursor: crosshair;
+}
