@@ -63,10 +63,18 @@
               <div class="term-body" id="term-body" style="display:none">
                 <div id="term-container"></div>
               </div>
-              <!-- #39 attachment composer — chip strip + text input + send.
-                   Hidden until an agent is selected. Chips show delivery
-                   status: queued(blue)/sent(amber)/seen(green)/stale(red). -->
-              <div id="compose-strip" class="compose-strip" style="display:none">
+            </div>
+            <!-- #39 attachment composer — kept OUTSIDE .term-panel so the
+                 terminal stays a pure Claude CLI window. Sits below the
+                 terminal as its own labelled input area. Hidden until an
+                 agent is selected. Chip status: queued(blue) / sent(amber)
+                 / seen(green) / stale(red). -->
+            <div id="compose-panel" class="compose-panel" style="display:none">
+              <div class="compose-head">
+                <span class="lab">Attach &amp; send</span>
+                <span class="hint">Bypasses the CLI's own input line — good for pasting screenshots or sketches.</span>
+              </div>
+              <div id="compose-strip" class="compose-strip">
                 <div class="chips"></div>
                 <div class="row">
                   <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>

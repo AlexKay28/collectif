@@ -616,10 +616,30 @@ header h1:hover { color: var(--accent); }
 #d-resume { background: #d29922; border-color: #d29922; color: #0d1117; font-weight: 600; }
 #d-resume:hover:not(:disabled) { background: #f0b429; border-color: #f0b429; }
 
-/* ─── #39 Attachment composer ────────────────── */
+/* ─── #39 Attachment composer ──────────────────
+   compose-panel is the OUTER wrapper (labeled box below the terminal),
+   compose-strip is the chips + input row inside it. The terminal panel
+   above stays a pure Claude CLI window, untouched by this UI. */
+.compose-panel {
+  margin-top: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px 10px;
+}
+.compose-panel .compose-head {
+  display: flex; align-items: baseline; gap: 10px;
+  margin-bottom: 6px;
+}
+.compose-panel .compose-head .lab {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); font-weight: 600;
+}
+.compose-panel .compose-head .hint {
+  font-size: 11px; color: var(--muted); font-style: italic;
+}
 .compose-strip {
   display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel);
 }
 .compose-strip .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .compose-strip .chips:empty { display: none; }

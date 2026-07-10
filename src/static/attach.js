@@ -95,11 +95,18 @@ async function sendComposedMessage(text) {
 // Render the chip strip + composer inside the terminal panel head. Called
 // by scheduleRender("term").
 function renderAttachmentStrip() {
+  // #39 The composer sits OUTSIDE the terminal panel now so the xterm stays
+  // a pure Claude CLI window. compose-panel is the outer wrapper we toggle
+  // for visibility; compose-strip inside holds the chips + input row.
+  const panel = document.getElementById("compose-panel");
   const container = document.getElementById("compose-strip");
   if (!container) return;
-  if (!selectedId) { container.style.display = "none"; return; }
+  if (!selectedId) {
+    if (panel) panel.style.display = "none";
+    return;
+  }
+  if (panel) panel.style.display = "block";
   const q = queueFor(selectedId);
-  container.style.display = "flex";
   const chips = container.querySelector(".chips");
   chips.innerHTML = "";
   for (const c of q) {
