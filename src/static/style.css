@@ -681,16 +681,15 @@ header h1:hover { color: var(--accent); }
 .health-row.danger { border-color: rgba(248, 81, 73, 0.5); background: rgba(248, 81, 73, 0.06); }
 .health-row.danger .score { color: var(--error); }
 
-/* ─── #39 Attachment composer ──────────────────
-   compose-panel is the OUTER wrapper (labeled box below the terminal),
-   compose-strip is the chips + input row inside it. The terminal panel
-   above stays a pure Claude CLI window, untouched by this UI. */
+/* ─── #40 Attachment composer ──────────────────
+   Lives inside .dash-team so its visibility follows Team's (shown only
+   when an agent is selected). Sits at the bottom of the right column,
+   separated from the Team canvas by a top border. */
 .compose-panel {
-  margin-top: 10px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
   padding: 8px 12px 10px;
+  flex-shrink: 0; /* stay at the bottom even when team-canvas grows */
 }
 .compose-panel .compose-head {
   display: flex; align-items: baseline; gap: 10px;

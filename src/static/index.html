@@ -64,26 +64,6 @@
                 <div id="term-container"></div>
               </div>
             </div>
-            <!-- #39 attachment composer — kept OUTSIDE .term-panel so the
-                 terminal stays a pure Claude CLI window. Sits below the
-                 terminal as its own labelled input area. Hidden until an
-                 agent is selected. Chip status: queued(blue) / sent(amber)
-                 / seen(green) / stale(red). -->
-            <div id="compose-panel" class="compose-panel" style="display:none">
-              <div class="compose-head">
-                <span class="lab">Attach &amp; send</span>
-                <span class="hint">Bypasses the CLI's own input line — good for pasting screenshots or sketches.</span>
-              </div>
-              <div id="compose-strip" class="compose-strip">
-                <div class="chips"></div>
-                <div class="row">
-                  <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
-                  <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
-                  <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
-                  <button id="compose-send" class="primary">Send</button>
-                </div>
-              </div>
-            </div>
           </div>
 
           <!-- RIGHT: team designer (when agent selected) OR overview metrics (when not) -->
@@ -100,6 +80,26 @@
               <div style="font-size:26px">🧑‍🤝‍🧑</div>
               <div>No subagents configured yet.</div>
               <div style="margin-top:10px"><button class="primary" id="team-empty-new">+ Create first subagent</button></div>
+            </div>
+            <!-- #40 attachment composer — moved from the left column so the
+                 xterm reclaims vertical space. Sits inside dash-team-panel
+                 below the Team canvas so it inherits the "visible when an
+                 agent is selected" toggle. Chip status: queued (blue) /
+                 sent (amber) / seen (green) / stale (red). -->
+            <div id="compose-panel" class="compose-panel">
+              <div class="compose-head">
+                <span class="lab">Attach &amp; send</span>
+                <span class="hint">Bypasses the CLI's own input line — paste, drop, or draw.</span>
+              </div>
+              <div id="compose-strip" class="compose-strip">
+                <div class="chips"></div>
+                <div class="row">
+                  <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
+                  <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
+                  <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
+                  <button id="compose-send" class="primary">Send</button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="dash-right" id="dash-right-metrics">

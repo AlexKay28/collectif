@@ -93,17 +93,11 @@ async function sendComposedMessage() {
 // Render the chip strip + composer inside the terminal panel head. Called
 // by scheduleRender("term").
 function renderAttachmentStrip() {
-  // #39 The composer sits OUTSIDE the terminal panel now so the xterm stays
-  // a pure Claude CLI window. compose-panel is the outer wrapper we toggle
-  // for visibility; compose-strip inside holds the chips + input row.
-  const panel = document.getElementById("compose-panel");
+  // #40 The composer lives inside dash-team-panel now; its visibility is
+  // driven by updateTeamVisibility(), not by us. Just render the chips —
+  // if there's no selected agent the parent panel is hidden anyway.
   const container = document.getElementById("compose-strip");
-  if (!container) return;
-  if (!selectedId) {
-    if (panel) panel.style.display = "none";
-    return;
-  }
-  if (panel) panel.style.display = "block";
+  if (!container || !selectedId) return;
   const q = queueFor(selectedId);
   const chips = container.querySelector(".chips");
   chips.innerHTML = "";
