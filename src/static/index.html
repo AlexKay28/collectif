@@ -109,6 +109,16 @@
             <h3 id="dash-review-head" style="display:none">Ready for review <span class="count" id="dash-review-count">0</span></h3>
             <div class="review-queue" id="dash-review" style="display:none"></div>
 
+            <!-- #42.7 Health check — sessions with score <70. Sits above
+                 context pressure so degradation surfaces before capacity. -->
+            <h3 id="dash-health-head" style="display:none">Health check <span class="count" id="dash-health-count">0</span></h3>
+            <div class="health-check" id="dash-health" style="display:none"></div>
+
+            <!-- #42.1 Context pressure — sessions with used-pct >= 70%,
+                 sorted worst-first so the imminent auto-compactor is at top. -->
+            <h3 id="dash-context-head" style="display:none">Context pressure <span class="count" id="dash-context-count">0</span></h3>
+            <div class="context-pressure" id="dash-context" style="display:none"></div>
+
             <!-- #35 Budget strip — hourly total against the configured cap.
                  Rendered by renderBudgetStrip() in dashboard.js. -->
             <h3>Budget <span class="count">last hour</span></h3>

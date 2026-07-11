@@ -117,6 +117,19 @@ type Session struct {
 	CacheCreationTokens int64
 	MessageCount        int
 
+	// #42.1 harness context-pressure telemetry. LastContextTokens is the
+	// total context (uncached + cache-read + cache-create) of the MOST
+	// RECENT assistant turn — not cumulative. Model is the id used for
+	// that turn; a fallback to smaller models mid-session updates this.
+	Model             string
+	LastContextTokens int64
+
+	// #42.7 harness health telemetry — rolling windows for loop and
+	// failure detection. Capped to recentToolCap / recentFailureCap in
+	// appendToolCall / appendFailure.
+	RecentToolCalls []ToolCallRecord
+	RecentFailures  []FailureRecord
+
 	// #35 cost cap — per-session USD budget. 0 = no cap.
 	// Kept adjacent to token counters so future budget-related fields
 	// stay grouped. Read/written under s.mu like the other counters.
@@ -456,6 +469,13 @@ func (s *Session) pushTask(prompt string) {
 func (s *Session) toJSON() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// #42.7 compute health under the lock so the snapshot is consistent
+	// with everything else we're about to serialise. Uses the Locked
+	// variant to avoid a re-lock deadlock.
+	healthScore, healthReason := computeHealthLocked(
+		s.RecentToolCalls, s.RecentFailures,
+		s.UpdatedAt, s.Status, s.LastContextTokens, s.Model,
+	)
 	activity := make([]ActivityEntry, len(s.Activity))
 	copy(activity, s.Activity)
 	toolCounts := make(map[string]int, len(s.ToolCounts))
@@ -508,6 +528,17 @@ func (s *Session) toJSON() map[string]any {
 		// #37 PR-ready
 		"prURL":   s.PRURL,
 		"prTitle": s.PRTitle,
+		// #42.1 harness telemetry — context pressure.
+		"model":             s.Model,
+		"lastContextTokens": s.LastContextTokens,
+		"contextLimit":      contextLimitFor(s.Model),
+		"contextUsedPct":    contextUsedPct(s),
+		// #42.7 harness telemetry — health score. Computed from the
+		// recent-tool + recent-failure rings and current status. Kept
+		// in-line so the client always gets a fresh score with each
+		// upsert broadcast.
+		"healthScore":  healthScore,
+		"healthReason": healthReason,
 	}
 }
 

@@ -616,6 +616,71 @@ header h1:hover { color: var(--accent); }
 #d-resume { background: #d29922; border-color: #d29922; color: #0d1117; font-weight: 600; }
 #d-resume:hover:not(:disabled) { background: #f0b429; border-color: #f0b429; }
 
+/* ─── #42.1 Context pressure ────────────────────
+   Thin bar under the token row on each sidebar tile. Only rendered when
+   we have a real signal (contextUsedPct > 0). Colour graduates ok →
+   warm → hot to match the Overview strip. */
+.ctx-bar {
+  height: 3px; border-radius: 2px; background: var(--panel-2);
+  margin-top: 4px; overflow: hidden;
+}
+.ctx-bar .fill { height: 100%; background: var(--running); transition: width 0.3s; }
+.ctx-bar.warm .fill { background: var(--waiting); }
+.ctx-bar.hot  .fill { background: var(--error); }
+
+/* Overview: "Context pressure" strip — rows listing sessions >70%. */
+.context-pressure { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.ctx-row, .health-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border);
+  transition: border-color 0.1s;
+}
+.ctx-row:hover, .health-row:hover { border-color: var(--border-hi); }
+.ctx-row .avatar-mini, .health-row .avatar-mini {
+  width: 26px; height: 26px; border-radius: 50%; overflow: hidden;
+  flex-shrink: 0; background: var(--panel);
+}
+.ctx-row .avatar-mini img, .health-row .avatar-mini img { width: 100%; height: 100%; display: block; }
+.ctx-row .body, .health-row .body { flex: 1; min-width: 0; }
+.ctx-row .name, .health-row .name { font-weight: 600; font-size: 12px; }
+.ctx-row .meta, .health-row .meta {
+  color: var(--muted); font-size: 10.5px; margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, monospace;
+}
+.ctx-row .pct, .health-row .score {
+  font-family: ui-monospace, monospace; font-weight: 700; font-size: 13px;
+}
+.ctx-row.warm { border-color: rgba(210, 153, 34, 0.4); }
+.ctx-row.warm .pct { color: var(--waiting); }
+.ctx-row.hot  { border-color: rgba(248, 81, 73, 0.5); background: rgba(248, 81, 73, 0.06); }
+.ctx-row.hot .pct { color: var(--error); }
+
+/* ─── #42.7 Session health ──────────────────────
+   Sidebar tile pill + Overview strip. Two severity levels: warn (<70)
+   and danger (<50). */
+.health-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9.5px; padding: 1px 6px; border-radius: 10px;
+  background: rgba(210, 153, 34, 0.15); color: var(--waiting);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  font-weight: 600; text-transform: none; letter-spacing: 0;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.health-pill.danger {
+  background: rgba(248, 81, 73, 0.15); color: var(--error);
+  border-color: rgba(248, 81, 73, 0.5);
+}
+.agent-card.unhealthy { box-shadow: inset 3px 0 0 var(--error); }
+.agent-card.unhealthy.selected { background: rgba(248, 81, 73, 0.08); }
+
+.health-check { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.health-row.warn { border-color: rgba(210, 153, 34, 0.4); }
+.health-row.warn .score { color: var(--waiting); }
+.health-row.danger { border-color: rgba(248, 81, 73, 0.5); background: rgba(248, 81, 73, 0.06); }
+.health-row.danger .score { color: var(--error); }
+
 /* ─── #39 Attachment composer ──────────────────
    compose-panel is the OUTER wrapper (labeled box below the terminal),
    compose-strip is the chips + input row inside it. The terminal panel

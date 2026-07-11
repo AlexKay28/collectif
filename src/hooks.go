@@ -99,6 +99,9 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 	case "PreToolUse":
 		s.recordTool(p.ToolName)
 		s.recordPreTool(p.ToolName, p.ToolInput)
+		// #42.7 health telemetry — feed the recent-tool ring so loop
+		// detection can flag stuck sessions.
+		s.appendToolCall(p.ToolName, p.ToolInput)
 		// Set structured state BEFORE setStatus so the broadcast that
 		// setStatus emits already carries the fresh askQuestion.
 		if p.ToolName == "AskUserQuestion" {
@@ -127,6 +130,9 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 
 	case "PostToolUseFailure":
 		s.appendActivity(ActivityEntry{Event: "PostToolUseFailure", Tool: p.ToolName, Level: "error"})
+		// #42.7 health telemetry — feed the recent-failure ring so a
+		// burst of failures counts toward the health penalty.
+		s.appendFailure(p.ToolName)
 		s.setStatus("error", "✗ "+p.ToolName)
 
 	case "Notification":

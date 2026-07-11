@@ -48,6 +48,13 @@ function connectDashboardWS() {
     } else if (msg.type === "cost_warning") {
       // #35 toast + highlight the sidebar tile.
       handleCostWarning(msg);
+    } else if (msg.type === "context_pressure") {
+      // #42.1 toast when a session crosses 70% (warn) or 90% (critical).
+      const a = agents.get(msg.id);
+      const nm = a ? agentName(a) : msg.id.slice(0, 8);
+      const pct = Math.round((msg.pct || 0) * 100);
+      if (msg.level === "critical") toast.error(nm + " at " + pct + "% context — compaction imminent");
+      else                          toast.info(nm + " at " + pct + "% context");
     } else if (msg.type === "attachment_sent" && window.collectifAttach) {
       window.collectifAttach.markAttachmentStatus(msg.id, msg.paths || [], "sent");
     } else if (msg.type === "attachment_seen" && window.collectifAttach) {

@@ -222,6 +222,86 @@ function renderToolUsage() {
     : toolEntries.map(([t, c]) => '<span class="chip">' + esc(t) + '<strong>' + c + '</strong></span>').join('');
 }
 
+// ─── #42.1 Context pressure strip ──────────────────
+// Lists sessions currently over 70% of their model's context window, oldest
+// first so you can see who's about to auto-compact. Hidden until at least
+// one session crosses the threshold.
+function renderContextPressure() {
+  const arr = Array.from(agents.values())
+    .filter(a => (a.contextUsedPct || 0) >= 0.7)
+    .sort((x, y) => (y.contextUsedPct || 0) - (x.contextUsedPct || 0));
+  const head = document.getElementById("dash-context-head");
+  const container = document.getElementById("dash-context");
+  const count = document.getElementById("dash-context-count");
+  if (!container || !head) return;
+  if (arr.length === 0) {
+    head.style.display = "none";
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+  head.style.display = "";
+  container.style.display = "";
+  if (count) count.textContent = String(arr.length);
+  container.innerHTML = arr.map(a => {
+    const pct = Math.round((a.contextUsedPct || 0) * 100);
+    const cls = pct >= 90 ? "hot" : "warm";
+    return (
+      '<div class="ctx-row ' + cls + '" data-id="' + esc(a.id) + '">' +
+        '<div class="avatar-mini"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="body">' +
+          '<div class="name">' + esc(agentName(a)) + '</div>' +
+          '<div class="meta">' + fmtNum(a.lastContextTokens || 0) + ' / ' + fmtNum(a.contextLimit || 0) + ' tokens · ' + esc(a.model || "?") + '</div>' +
+        '</div>' +
+        '<div class="pct">' + pct + '%</div>' +
+      '</div>'
+    );
+  }).join("");
+  container.querySelectorAll(".ctx-row").forEach(el => {
+    el.addEventListener("click", () => selectAgent(el.dataset.id));
+  });
+}
+
+// ─── #42.7 Health check strip ──────────────────────
+// Lists sessions whose health score has dropped below 70. Shows the
+// primary reason (loop, failures, stall, context, over-budget) so the
+// human can act. Hidden until at least one session is degraded.
+function renderHealthCheck() {
+  const arr = Array.from(agents.values())
+    .filter(a => (a.healthScore == null ? 100 : a.healthScore) < 70)
+    .sort((x, y) => (x.healthScore || 0) - (y.healthScore || 0));
+  const head = document.getElementById("dash-health-head");
+  const container = document.getElementById("dash-health");
+  const count = document.getElementById("dash-health-count");
+  if (!container || !head) return;
+  if (arr.length === 0) {
+    head.style.display = "none";
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+  head.style.display = "";
+  container.style.display = "";
+  if (count) count.textContent = String(arr.length);
+  container.innerHTML = arr.map(a => {
+    const score = a.healthScore == null ? 100 : a.healthScore;
+    const cls = score < 50 ? "danger" : "warn";
+    return (
+      '<div class="health-row ' + cls + '" data-id="' + esc(a.id) + '">' +
+        '<div class="avatar-mini"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
+        '<div class="body">' +
+          '<div class="name">' + esc(agentName(a)) + '</div>' +
+          '<div class="meta">' + esc(a.healthReason || "degraded") + '</div>' +
+        '</div>' +
+        '<div class="score">' + score + '</div>' +
+      '</div>'
+    );
+  }).join("");
+  container.querySelectorAll(".health-row").forEach(el => {
+    el.addEventListener("click", () => selectAgent(el.dataset.id));
+  });
+}
+
 // ─── #37 PR-ready: Review queue ──────────────────
 // Sessions in "review_ready" surface here for quick human triage. Two
 // buttons per row: Open PR (external link) and Mark reviewed (server
@@ -447,6 +527,20 @@ function renderSidebar() {
     const quiet = window.collectifNotify && window.collectifNotify.isQuiet(a.id);
     const quietIcon  = quiet ? "🔔" : "🔕";
     const quietTitle = quiet ? "Un-mute notifications for this agent" : "Mute notifications for this agent";
+    // #42.1 context pressure bar under the token row. Green <60%,
+    // amber 60-85%, red >85%. Only render when we have signal.
+    const ctxPct = a.contextUsedPct || 0;
+    let ctxCls = "ok";
+    if (ctxPct >= 0.85) ctxCls = "hot";
+    else if (ctxPct >= 0.6) ctxCls = "warm";
+    const ctxBar = ctxPct > 0
+      ? '<div class="ctx-bar ' + ctxCls + '" title="Context ' + Math.round(ctxPct*100) + '% (' + fmtNum(a.lastContextTokens||0) + ' / ' + fmtNum(a.contextLimit||0) + ' tokens)"><div class="fill" style="width:' + (ctxPct*100).toFixed(1) + '%"></div></div>'
+      : "";
+    // #42.7 health warning pill — only shown when score drops below 70.
+    const health = a.healthScore == null ? 100 : a.healthScore;
+    const healthPill = health < 70
+      ? '<span class="health-pill' + (health < 50 ? ' danger' : '') + '" title="' + esc(a.healthReason || "degraded") + '">⚠ ' + esc(a.healthReason || "degraded") + '</span>'
+      : "";
     c.innerHTML = (
       '<button class="quiet-btn" draggable="false" title="' + esc(quietTitle) + '">' + quietIcon + '</button>' +
       '<button class="kill-btn" draggable="false" title="Kill agent">×</button>' +
@@ -458,13 +552,15 @@ function renderSidebar() {
           (a.status === "review_ready" ? '<span class="review-badge">PR</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +
           '<div class="card-cwd" title="' + esc(a.cwd) + '">' + esc(cwdBase(a.cwd)) + '</div>' +
-          '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span></div>' +
+          '<div class="card-status-row"><span class="status-pill ' + esc(a.status || "idle") + '"><span class="dot"></span>' + esc((a.status || "idle").replace("_", " ")) + '</span>' + healthPill + '</div>' +
           (task ? '<div class="card-activity" title="' + esc(task) + '">▸ ' + esc(task) + '</div>' : '') +
           (activityText ? '<div class="card-activity">' + esc(activityText) + '</div>' : '') +
           (tokTotal > 0 ? '<div class="card-token">' + fmtNum(a.inputTokens || 0) + ' in · ' + fmtNum(a.outputTokens || 0) + ' out</div>' : '') +
+          ctxBar +
         '</div>' +
       '</div>'
     );
+    if (health < 50) c.classList.add("unhealthy");
     // Card click → select (but only if the click didn't originate on kill
     // or the quiet-toggle).
     c.addEventListener("click", (ev) => {

@@ -94,6 +94,10 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 			var addedIn, addedOut, addedCR, addedCC int64
 			var addedMsgs int
 			var read int64
+			// #42.1 harness telemetry — set by the LAST usage-bearing line
+			// we see this tick. Written through to Session below.
+			var lastCtx int64
+			var lastModel string
 			for {
 				line, err := br.ReadBytes('\n')
 				read += int64(len(line))
@@ -111,6 +115,13 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 						addedCR += cr
 						addedCC += cc
 						addedMsgs++
+						// #42.1 track LAST turn's total context + model,
+						// separate from cumulative counters. A turn's
+						// context is uncached + cache-read + cache-create.
+						lastCtx = in + cr + cc
+						if m := extractModel(line); m != "" {
+							lastModel = m
+						}
 					}
 				}
 				if err != nil {
@@ -126,8 +137,20 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 				s.CacheReadTokens += addedCR
 				s.CacheCreationTokens += addedCC
 				s.MessageCount += addedMsgs
+				// #42.1 write through the last-turn snapshot. Only replace
+				// if we actually observed a new value this tick so a tick
+				// with no usage lines doesn't zero out the field.
+				if lastCtx > 0 {
+					s.LastContextTokens = lastCtx
+				}
+				if lastModel != "" {
+					s.Model = lastModel
+				}
 				s.mu.Unlock()
 				if addedMsgs > 0 {
+					// Broadcast context warning after unlocking so the
+					// downstream serializer isn't waiting on us.
+					maybeBroadcastContextPressure(s)
 					s.touch()
 				}
 			}
@@ -151,6 +174,30 @@ func extractUsage(line []byte) (in, out, cr, cc int64, ok bool) {
 			true
 	}
 	return 0, 0, 0, 0, false
+}
+
+// extractModel pulls the model id from a transcript line. Anthropic puts
+// it at message.model on assistant turns; older/newer shapes vary so we
+// probe a small set of well-known locations. #42.1.
+func extractModel(line []byte) string {
+	var v map[string]any
+	if err := json.Unmarshal(line, &v); err != nil {
+		return ""
+	}
+	if s, ok := v["model"].(string); ok && s != "" {
+		return s
+	}
+	if m, ok := v["message"].(map[string]any); ok {
+		if s, ok := m["model"].(string); ok && s != "" {
+			return s
+		}
+	}
+	if r, ok := v["response"].(map[string]any); ok {
+		if s, ok := r["model"].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func findUsage(v map[string]any) map[string]any {
