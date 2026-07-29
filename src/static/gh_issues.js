@@ -143,9 +143,19 @@
     loading: false,
     loadError: null,
     empty: false,           // set when backend has no cache yet
+    boundAgentId: null,     // the selectedId this state's data was fetched for
   };
 
   // ─── Fetch helpers ────────────────────────────
+  // Every /api/gh/* URL gets ?agent=<selectedId> appended so the backend
+  // resolves the repo from the currently-focused agent's cwd. When nothing
+  // is selected the param is omitted and the backend falls back to its own
+  // cwd (matches pre-#44-scoping behavior).
+  function withAgent(path) {
+    const id = window.selectedId || null;
+    if (!id) return path;
+    return path + (path.includes("?") ? "&" : "?") + "agent=" + encodeURIComponent(id);
+  }
   async function apiIssues(params) {
     if (FIXTURE_MODE) {
       const q = params || {};
@@ -159,7 +169,7 @@
     const usp = new URLSearchParams();
     if (params) for (const [k, v] of Object.entries(params)) if (v) usp.set(k, v);
     const suffix = usp.toString() ? ("?" + usp.toString()) : "";
-    const res = await fetch("/api/gh/issues" + suffix);
+    const res = await fetch(withAgent("/api/gh/issues" + suffix));
     if (!res.ok) throw new Error("issues: " + res.status);
     return await res.json();
   }
@@ -169,7 +179,7 @@
       if (!d) throw new Error("not cached");
       return d;
     }
-    const res = await fetch("/api/gh/issues/" + encodeURIComponent(n));
+    const res = await fetch(withAgent("/api/gh/issues/" + encodeURIComponent(n)));
     if (!res.ok) throw new Error("issue " + n + ": " + res.status);
     return await res.json();
   }
@@ -182,15 +192,30 @@
         syncing: false, pendingCount: 0,
       };
     }
-    const res = await fetch("/api/gh/status");
+    const res = await fetch(withAgent("/api/gh/status"));
     if (!res.ok) throw new Error("status: " + res.status);
     return await res.json();
   }
   async function apiSync() {
     if (FIXTURE_MODE) return { started: true };
-    const res = await fetch("/api/gh/sync", { method: "POST" });
+    const res = await fetch(withAgent("/api/gh/sync"), { method: "POST" });
     if (!res.ok) throw new Error("sync: " + res.status);
     return await res.json();
+  }
+  // Wipe cached data so the next activate() re-fetches. Called when the
+  // selected agent changes (agent-selected event) or on explicit reset.
+  function resetForAgentChange() {
+    state.issues = [];
+    state.total = 0;
+    state.detailBodies = {};
+    state.currentIssue = null;
+    state.syncStatus = null;
+    state.loadError = null;
+    state.empty = false;
+    state.boundAgentId = window.selectedId || null;
+    if (state.syncPollTimer) { clearInterval(state.syncPollTimer); state.syncPollTimer = 0; }
+    const view = document.getElementById("gh-issues-view");
+    if (view) delete view.dataset.built; // force full re-render of shell
   }
 
   // ─── Utilities ────────────────────────────────
@@ -748,9 +773,12 @@
 
   // ─── Boot ─────────────────────────────────────
   // Invoked by the right-panel tab switcher (index.html) on first click of
-  // the Issues tab. Idempotent: subsequent calls just refresh.
+  // the Issues tab, and re-invoked whenever the selected agent changes so
+  // the list is refreshed against the new agent's repo.
   function activate() {
     if (window.AGENTCTL_NO_TOKEN) return;
+    const currentAgent = window.selectedId || null;
+    if (state.boundAgentId !== currentAgent) resetForAgentChange();
     showView("issues");
     renderShell();
     if (state.issues.length === 0) {
@@ -761,6 +789,16 @@
       refreshStatus();
     }
   }
+
+  // If the user picks a different agent while the Issues tab is already
+  // rendered, wipe our cached data + re-fetch. If the tab is hidden, just
+  // mark state stale so the next activate() reloads.
+  document.addEventListener("collectif-agent-selected", () => {
+    const pane = document.querySelector('#dash-team-panel [data-rpane="issues"]');
+    const visible = pane && pane.style.display !== "none";
+    if (visible) activate();
+    else resetForAgentChange();
+  });
 
   // Expose activate() so the right-panel tab switcher can lazy-init us.
   window.collectifGhIssues = { activate };

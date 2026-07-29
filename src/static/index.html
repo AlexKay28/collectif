@@ -290,22 +290,46 @@
 <script src="gh_issues.js" defer></script>
 <script src="gh_prs.js" defer></script>
 <style>
-  /* #44 right-panel tabs — Team / Issues / PRs live inside #dash-team-panel */
+  /* #44 right-panel tabs — Team / Issues / PRs live inside #dash-team-panel.
+     The parent (.dash-team) is a flex column with height 100%; the tab bar
+     is fixed-height and the active pane fills the remaining space and
+     scrolls internally. */
   #dash-team-panel .right-tabs {
-    display: flex; gap: 2px; padding: 0 4px; margin-bottom: 8px;
+    display: flex; gap: 2px; padding: 0 4px;
     border-bottom: 1px solid var(--border, #2a2a2a);
+    background: var(--panel-2, #1a1a1a);
+    flex: 0 0 auto;
   }
   #dash-team-panel .right-tabs .rtab {
-    background: transparent; border: 0; padding: 6px 10px;
-    color: var(--muted, #888); font-size: 12px; text-transform: uppercase;
+    background: transparent; border: 0; padding: 8px 12px;
+    color: var(--muted, #888); font-size: 11.5px; text-transform: uppercase;
     letter-spacing: 0.06em; cursor: pointer; border-bottom: 2px solid transparent;
     margin-bottom: -1px;
   }
-  #dash-team-panel .right-tabs .rtab:hover { color: var(--fg, #eee); }
+  #dash-team-panel .right-tabs .rtab:hover { color: var(--text, #eee); }
   #dash-team-panel .right-tabs .rtab.active {
-    color: var(--fg, #eee); border-bottom-color: var(--accent, #6aa4ff);
+    color: var(--text, #eee); border-bottom-color: var(--accent, #6aa4ff);
   }
-  #dash-team-panel .rtab-pane { min-height: 0; }
+  /* Team pane keeps its own internal scroll (via .team-canvas), so it just
+     needs to fill the remaining flex space. Issues/PRs panes ARE the scroll
+     container — same pattern as .team-canvas — because their inner list and
+     detail views inject long content directly. */
+  #dash-team-panel .rtab-pane[data-rpane="team"] {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  }
+  #dash-team-panel .rtab-pane[data-rpane="issues"],
+  #dash-team-panel .rtab-pane[data-rpane="prs"] {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  }
+  /* Neutralize the height:100% / overflow-y:auto that slice B/C set on the
+     inner list + detail divs — those made sense when they were top-level
+     views; inside a scrolling tab pane they create a nested scroll trap. */
+  #dash-team-panel [data-rpane="issues"] > #gh-issues-view,
+  #dash-team-panel [data-rpane="issues"] > #gh-issue-detail,
+  #dash-team-panel [data-rpane="prs"] > #gh-prs-view,
+  #dash-team-panel [data-rpane="prs"] > #gh-pr-detail {
+    height: auto; overflow: visible; min-height: 0;
+  }
 </style>
 <script>
   // #44 right-panel tab switcher. Team is default; Issues/PRs mount on first

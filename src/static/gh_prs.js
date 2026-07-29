@@ -109,6 +109,7 @@
     },
     status: null,          // /api/gh/status JSON
     syncing: false,
+    boundAgentId: null,    // selectedId this state's data was fetched for
   };
 
   // ─── Small helpers ─────────────────────────────────
@@ -131,9 +132,16 @@
   }
 
   // ─── Data layer ────────────────────────────────────
+  // Appends ?agent=<selectedId> so the backend resolves the target repo
+  // from the currently-focused agent's cwd rather than the server's own.
+  function withAgent(path) {
+    const id = window.selectedId || null;
+    if (!id) return path;
+    return path + (path.includes("?") ? "&" : "?") + "agent=" + encodeURIComponent(id);
+  }
   async function apiGet(path) {
     if (FIXTURE_MODE) return fixtureFor(path);
-    const res = await fetch(path);
+    const res = await fetch(withAgent(path));
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       const err = new Error("HTTP " + res.status + (body ? ": " + body : ""));
@@ -210,7 +218,7 @@
     state.syncing = true;
     renderSyncBar();
     try {
-      const res = await fetch("/api/gh/sync", { method: "POST" });
+      const res = await fetch(withAgent("/api/gh/sync"), { method: "POST" });
       if (!res.ok) throw new Error("HTTP " + res.status + ": " + (await res.text().catch(() => "")));
       toastMsg("info", "Sync started");
       pollUntilIdle();
@@ -847,11 +855,13 @@
 
   // ─── Activation ──────────────────────────────────
   // Invoked by the right-panel tab switcher (index.html) on first click of
-  // the PRs tab inside #dash-team-panel. Idempotent — subsequent calls just
-  // re-render whichever internal view (list vs detail) is current.
+  // the PRs tab and re-invoked whenever the selected agent changes so the
+  // list is refreshed against the new agent's repo.
   function activate() {
     const view = root();
     if (!view) return;
+    const currentAgent = window.selectedId || null;
+    if (state.boundAgentId !== currentAgent) resetForAgentChange();
     if (state.view === "list") {
       renderList();
       if (state.status == null) loadStatus().then(renderSyncBar);
@@ -860,6 +870,27 @@
       renderDetail();
     }
   }
+  function resetForAgentChange() {
+    state.view = "list";
+    state.prNumber = null;
+    state.detailTab = "conversation";
+    state.diffText = null;
+    state.diffError = null;
+    state.expandedFiles = new Set();
+    state.detailData = null;
+    state.detailError = null;
+    state.list = null;
+    state.listError = null;
+    state.status = null;
+    state.syncing = false;
+    state.boundAgentId = window.selectedId || null;
+  }
+  document.addEventListener("collectif-agent-selected", () => {
+    const pane = document.querySelector('#dash-team-panel [data-rpane="prs"]');
+    const visible = pane && pane.style.display !== "none";
+    if (visible) activate();
+    else resetForAgentChange();
+  });
 
   window.collectifGhPrs = { activate };
 })();
