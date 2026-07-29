@@ -132,10 +132,14 @@
   }
 
   // ─── Data layer ────────────────────────────────────
-  // Appends ?agent=<selectedId> so the backend resolves the target repo
-  // from the currently-focused agent's cwd rather than the server's own.
+  // core.js declares `let selectedId` at top level — that's globally reachable
+  // as a bare identifier but is NOT a property of window, so `window.selectedId`
+  // returns undefined. Read the identifier directly, with a typeof guard.
+  function currentAgentId() {
+    return (typeof selectedId !== "undefined" && selectedId) ? selectedId : null;
+  }
   function withAgent(path) {
-    const id = window.selectedId || null;
+    const id = currentAgentId();
     if (!id) return path;
     return path + (path.includes("?") ? "&" : "?") + "agent=" + encodeURIComponent(id);
   }
@@ -860,7 +864,7 @@
   function activate() {
     const view = root();
     if (!view) return;
-    const currentAgent = window.selectedId || null;
+    const currentAgent = currentAgentId();
     if (state.boundAgentId !== currentAgent) resetForAgentChange();
     if (state.view === "list") {
       renderList();
@@ -883,7 +887,7 @@
     state.listError = null;
     state.status = null;
     state.syncing = false;
-    state.boundAgentId = window.selectedId || null;
+    state.boundAgentId = currentAgentId();
   }
   document.addEventListener("collectif-agent-selected", () => {
     const pane = document.querySelector('#dash-team-panel [data-rpane="prs"]');

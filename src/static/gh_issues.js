@@ -151,8 +151,15 @@
   // resolves the repo from the currently-focused agent's cwd. When nothing
   // is selected the param is omitted and the backend falls back to its own
   // cwd (matches pre-#44-scoping behavior).
+  // core.js declares `let selectedId` at top level — that's globally reachable
+  // as a bare identifier but is NOT a property of window, so `window.selectedId`
+  // returns undefined. Read the identifier directly, with a typeof guard for
+  // the (unlikely) case where core.js hasn't loaded yet.
+  function currentAgentId() {
+    return (typeof selectedId !== "undefined" && selectedId) ? selectedId : null;
+  }
   function withAgent(path) {
-    const id = window.selectedId || null;
+    const id = currentAgentId();
     if (!id) return path;
     return path + (path.includes("?") ? "&" : "?") + "agent=" + encodeURIComponent(id);
   }
@@ -212,7 +219,7 @@
     state.syncStatus = null;
     state.loadError = null;
     state.empty = false;
-    state.boundAgentId = window.selectedId || null;
+    state.boundAgentId = currentAgentId();
     if (state.syncPollTimer) { clearInterval(state.syncPollTimer); state.syncPollTimer = 0; }
     const view = document.getElementById("gh-issues-view");
     if (view) delete view.dataset.built; // force full re-render of shell
@@ -777,7 +784,7 @@
   // the list is refreshed against the new agent's repo.
   function activate() {
     if (window.AGENTCTL_NO_TOKEN) return;
-    const currentAgent = window.selectedId || null;
+    const currentAgent = currentAgentId();
     if (state.boundAgentId !== currentAgent) resetForAgentChange();
     showView("issues");
     renderShell();
