@@ -5,6 +5,8 @@
 <title>collectif</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="gh_issues.css">
+<link rel="stylesheet" href="gh_prs.css">
 </head>
 <body>
 <div id="app">
@@ -66,40 +68,55 @@
             </div>
           </div>
 
-          <!-- RIGHT: team designer (when agent selected) OR overview metrics (when not) -->
+          <!-- RIGHT: agent-session panel (visible when an agent is selected).
+               Tabbed: Team / Issues / PRs. Team is the default pane and hosts
+               the subagent designer + attachment composer; Issues and PRs
+               mount the #44 GitHub-mirror views. -->
           <div class="dash-team" id="dash-team-panel" style="display:none">
-            <div class="team-inline-head">
-              <h3 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Team</h3>
-              <span class="team-cwd" id="team-cwd"></span>
-              <span class="spacer"></span>
-              <button id="team-refresh" title="Re-read .claude/agents from disk">↻</button>
-              <button class="primary" id="team-new">+ Subagent</button>
+            <div class="right-tabs">
+              <button class="rtab active" data-rtab="team">Team</button>
+              <button class="rtab" data-rtab="issues">Issues</button>
+              <button class="rtab" data-rtab="prs">PRs</button>
             </div>
-            <div class="team-canvas" id="team-canvas"></div>
-            <div class="team-empty" id="team-empty" style="display:none">
-              <div style="font-size:26px">🧑‍🤝‍🧑</div>
-              <div>No subagents configured yet.</div>
-              <div style="margin-top:10px"><button class="primary" id="team-empty-new">+ Create first subagent</button></div>
-            </div>
-            <!-- #40 attachment composer — moved from the left column so the
-                 xterm reclaims vertical space. Sits inside dash-team-panel
-                 below the Team canvas so it inherits the "visible when an
-                 agent is selected" toggle. Chip status: queued (blue) /
-                 sent (amber) / seen (green) / stale (red). -->
-            <div id="compose-panel" class="compose-panel">
-              <div class="compose-head">
-                <span class="lab">Attach &amp; send</span>
-                <span class="hint">Bypasses the CLI's own input line — paste, drop, or draw.</span>
+            <div class="rtab-pane" data-rpane="team">
+              <div class="team-inline-head">
+                <h3 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Team</h3>
+                <span class="team-cwd" id="team-cwd"></span>
+                <span class="spacer"></span>
+                <button id="team-refresh" title="Re-read .claude/agents from disk">↻</button>
+                <button class="primary" id="team-new">+ Subagent</button>
               </div>
-              <div id="compose-strip" class="compose-strip">
-                <div class="chips"></div>
-                <div class="row">
-                  <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
-                  <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
-                  <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
-                  <button id="compose-send" class="primary">Send</button>
+              <div class="team-canvas" id="team-canvas"></div>
+              <div class="team-empty" id="team-empty" style="display:none">
+                <div style="font-size:26px">🧑‍🤝‍🧑</div>
+                <div>No subagents configured yet.</div>
+                <div style="margin-top:10px"><button class="primary" id="team-empty-new">+ Create first subagent</button></div>
+              </div>
+              <!-- #40 attachment composer — sits in the Team pane so it
+                   inherits the "visible when an agent is selected" toggle. -->
+              <div id="compose-panel" class="compose-panel">
+                <div class="compose-head">
+                  <span class="lab">Attach &amp; send</span>
+                  <span class="hint">Bypasses the CLI's own input line — paste, drop, or draw.</span>
+                </div>
+                <div id="compose-strip" class="compose-strip">
+                  <div class="chips"></div>
+                  <div class="row">
+                    <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
+                    <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
+                    <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
+                    <button id="compose-send" class="primary">Send</button>
+                  </div>
                 </div>
               </div>
+            </div>
+            <div class="rtab-pane" data-rpane="issues" style="display:none">
+              <div id="gh-issues-view"></div>
+              <div id="gh-issue-detail" style="display:none"></div>
+            </div>
+            <div class="rtab-pane" data-rpane="prs" style="display:none">
+              <div id="gh-prs-view"></div>
+              <div id="gh-pr-detail" style="display:none"></div>
             </div>
           </div>
           <div class="dash-right" id="dash-right-metrics">
@@ -270,5 +287,77 @@
 <script src="attach.js"></script>
 <script src="draw.js"></script>
 <script src="app.js"></script>
+<script src="gh_issues.js" defer></script>
+<script src="gh_prs.js" defer></script>
+<style>
+  /* #44 right-panel tabs — Team / Issues / PRs live inside #dash-team-panel.
+     The parent (.dash-team) is a flex column with height 100%; the tab bar
+     is fixed-height and the active pane fills the remaining space and
+     scrolls internally. */
+  #dash-team-panel .right-tabs {
+    display: flex; gap: 2px; padding: 0 4px;
+    border-bottom: 1px solid var(--border, #2a2a2a);
+    background: var(--panel-2, #1a1a1a);
+    flex: 0 0 auto;
+  }
+  #dash-team-panel .right-tabs .rtab {
+    background: transparent; border: 0; padding: 8px 12px;
+    color: var(--muted, #888); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; cursor: pointer; border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  #dash-team-panel .right-tabs .rtab:hover { color: var(--text, #eee); }
+  #dash-team-panel .right-tabs .rtab.active {
+    color: var(--text, #eee); border-bottom-color: var(--accent, #6aa4ff);
+  }
+  /* Force the outer panel to clip so its flex children can't grow past it
+     (the default overflow: visible was letting the pane bleed and skip
+     scroll entirely). */
+  #dash-team-panel { overflow: hidden; }
+  /* Team pane keeps its own internal scroll (via .team-canvas). */
+  #dash-team-panel .rtab-pane[data-rpane="team"] {
+    flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+  }
+  /* Issues/PRs panes ARE the scroll container. flex-basis: 0 (not auto)
+     so the pane takes remaining space regardless of content size — with
+     `auto` basis the pane sized to content and never triggered scroll. */
+  #dash-team-panel .rtab-pane[data-rpane="issues"],
+  #dash-team-panel .rtab-pane[data-rpane="prs"] {
+    flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  }
+  /* Neutralize the height:100% / overflow-y:auto that slice B/C set on the
+     inner list + detail divs — those made sense when they were top-level
+     views; inside a scrolling tab pane they create a nested scroll trap. */
+  #dash-team-panel [data-rpane="issues"] > #gh-issues-view,
+  #dash-team-panel [data-rpane="issues"] > #gh-issue-detail,
+  #dash-team-panel [data-rpane="prs"] > #gh-prs-view,
+  #dash-team-panel [data-rpane="prs"] > #gh-pr-detail {
+    height: auto; overflow: visible; min-height: 0;
+  }
+</style>
+<script>
+  // #44 right-panel tab switcher. Team is default; Issues/PRs mount on first
+  // activation via the module's exported window.collectifGhIssues.activate()
+  // / window.collectifGhPrs.activate() so their sync fetch is lazy.
+  (function () {
+    const panel = document.getElementById("dash-team-panel");
+    if (!panel) return;
+    const initialized = { team: true, issues: false, prs: false };
+    panel.addEventListener("click", (e) => {
+      const btn = e.target.closest(".rtab");
+      if (!btn) return;
+      const which = btn.dataset.rtab;
+      for (const b of panel.querySelectorAll(".rtab")) b.classList.toggle("active", b === btn);
+      for (const p of panel.querySelectorAll(".rtab-pane")) {
+        p.style.display = p.dataset.rpane === which ? "" : "none";
+      }
+      if (!initialized[which]) {
+        initialized[which] = true;
+        if (which === "issues" && window.collectifGhIssues) window.collectifGhIssues.activate();
+        else if (which === "prs" && window.collectifGhPrs) window.collectifGhPrs.activate();
+      }
+    });
+  })();
+</script>
 </body>
 </html>

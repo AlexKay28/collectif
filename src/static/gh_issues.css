@@ -1,0 +1,241 @@
+/* ─── #44 Slice B — GitHub Issues frontend ──────────
+   All styles for the local Issues mirror surfaces. Reuses --fg/--bg/etc.
+   from style.css; never modifies them. Two surfaces:
+     • #gh-issues-view  — list + filters + sync bar
+     • #gh-issue-detail — single-issue view w/ markdown + comments
+
+   GitHub-fidelity means: soft borders, monospace only for code/numbers,
+   pill-shaped labels colored from the label's own hex, muted meta text
+   under a bold title. We DO NOT try to pixel-match GitHub — just their
+   visual grammar so a returning user knows where everything is. */
+
+/* ─── Top nav (Overview / Issues / …) ─────────── */
+#top-nav { display: flex; gap: 4px; margin-left: 8px; }
+.nav-btn {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  padding: 5px 12px; border-radius: 6px; font: 600 12px -apple-system, sans-serif;
+  cursor: pointer; letter-spacing: 0.02em;
+}
+.nav-btn:hover { color: var(--text); background: var(--panel-2); }
+.nav-btn.active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+
+/* ─── Issues shell ────────────────────────────── */
+#gh-issues-view { height: 100%; overflow-y: auto; padding: 16px 20px 24px; min-width: 0; }
+.gh-shell-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.gh-shell-head h2 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+.gh-shell-head .repo { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.gh-shell-head .spacer { flex: 1; }
+
+/* Sync bar sits under the title — spinner while syncing, last-sync age, ↻ button. */
+.gh-sync-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 12px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  font-size: 12px;
+}
+.gh-sync-bar .status { color: var(--muted); }
+.gh-sync-bar .spinner {
+  display: inline-block; width: 12px; height: 12px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: gh-spin 0.8s linear infinite;
+}
+.gh-sync-bar .spacer { flex: 1; }
+@keyframes gh-spin { to { transform: rotate(360deg); } }
+
+/* ─── Filters row ─────────────────────────────── */
+.gh-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 0;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px 6px 0 0; border-bottom: 0;
+}
+.gh-state-pills { display: inline-flex; }
+.gh-state-pills button {
+  border-radius: 0; padding: 4px 12px; font-size: 12px;
+  border-right-width: 0; background: var(--panel-2); color: var(--muted);
+}
+.gh-state-pills button:first-child { border-radius: 6px 0 0 6px; }
+.gh-state-pills button:last-child  { border-radius: 0 6px 6px 0; border-right-width: 1px; }
+.gh-state-pills button.on { color: var(--text); background: var(--panel); border-color: var(--border-hi); }
+.gh-state-pills button .n { color: var(--muted); font-family: ui-monospace, monospace; margin-left: 4px; font-size: 11px; }
+.gh-state-pills button.on .n { color: var(--text); }
+
+.gh-filters select, .gh-filters input[type="text"] {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; font: 12px -apple-system, sans-serif;
+}
+.gh-filters input[type="text"] { min-width: 200px; }
+.gh-filters input[type="text"]:focus, .gh-filters select:focus { outline: none; border-color: var(--accent); }
+.gh-filters .spacer { flex: 1; }
+
+/* ─── Issues list ─────────────────────────────── */
+.gh-list {
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 0 0 6px 6px;
+  overflow: hidden;
+}
+.gh-list .empty {
+  padding: 32px 16px; text-align: center; color: var(--muted); font-size: 13px;
+}
+.gh-list .empty .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.gh-row {
+  display: grid; grid-template-columns: 20px 1fr; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  cursor: pointer; transition: background 0.06s;
+}
+.gh-row:last-child { border-bottom: 0; }
+.gh-row:hover { background: var(--panel-2); }
+.gh-row .icon { color: var(--running); font-size: 14px; padding-top: 1px; line-height: 1; }
+.gh-row.closed .icon { color: #a371f7; }
+.gh-row .body { min-width: 0; }
+.gh-row .title-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  min-width: 0;
+}
+.gh-row .num { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12.5px; }
+.gh-row .title {
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  word-break: break-word;
+}
+.gh-row:hover .title { color: var(--accent); }
+.gh-row .meta {
+  color: var(--muted); font-size: 11.5px; margin-top: 3px;
+}
+.gh-row .meta .dot-sep { margin: 0 6px; opacity: 0.5; }
+
+/* Label chips — colored background from label hex, computed text color. */
+.gh-label {
+  display: inline-flex; align-items: center;
+  padding: 1px 8px; border-radius: 10px;
+  font-size: 10.5px; font-weight: 600; line-height: 1.5;
+  border: 1px solid rgba(255,255,255,0.08);
+  vertical-align: middle;
+}
+
+/* ─── Single-issue view ───────────────────────── */
+#gh-issue-detail { height: 100%; overflow-y: auto; padding: 16px 24px 32px; min-width: 0; }
+.gh-back {
+  background: transparent; border: 0; color: var(--accent);
+  padding: 4px 0; font-size: 12px; cursor: pointer;
+  margin-bottom: 10px;
+}
+.gh-back:hover { text-decoration: underline; }
+
+.gh-issue-head { border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 18px; }
+.gh-issue-head h1 {
+  margin: 0; font-size: 24px; font-weight: 400; letter-spacing: -0.01em;
+  word-break: break-word;
+}
+.gh-issue-head h1 .num { color: var(--muted); font-weight: 300; }
+.gh-issue-head .sub {
+  margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--muted);
+}
+
+/* State pill — green Open / purple Closed. */
+.gh-state-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 600;
+  color: #fff;
+}
+.gh-state-pill.open   { background: #238636; }
+.gh-state-pill.closed { background: #8250df; }
+.gh-state-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: #fff; opacity: 0.9; }
+
+.gh-labels-inline { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+
+/* ─── Markdown body ───────────────────────────── */
+.gh-md {
+  font-size: 13.5px; line-height: 1.6;
+  color: var(--text); word-wrap: break-word;
+}
+.gh-md > *:first-child { margin-top: 0; }
+.gh-md > *:last-child { margin-bottom: 0; }
+.gh-md p { margin: 0 0 12px; }
+.gh-md h1, .gh-md h2, .gh-md h3, .gh-md h4, .gh-md h5, .gh-md h6 {
+  margin: 18px 0 10px; font-weight: 700; line-height: 1.25;
+}
+.gh-md h1 { font-size: 20px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.gh-md h2 { font-size: 17px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.gh-md h3 { font-size: 15px; }
+.gh-md h4 { font-size: 13.5px; }
+.gh-md a { color: var(--accent); text-decoration: none; }
+.gh-md a:hover { text-decoration: underline; }
+.gh-md code {
+  font-family: ui-monospace, monospace; font-size: 90%;
+  padding: 2px 5px; border-radius: 4px;
+  background: rgba(110, 118, 129, 0.2);
+}
+.gh-md pre {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; overflow-x: auto; margin: 0 0 12px;
+}
+.gh-md pre code { background: transparent; padding: 0; font-size: 12px; }
+.gh-md ul, .gh-md ol { margin: 0 0 12px; padding-left: 24px; }
+.gh-md li { margin-bottom: 4px; }
+.gh-md li.task { list-style: none; margin-left: -20px; }
+.gh-md li.task input[type="checkbox"] { margin-right: 6px; vertical-align: middle; }
+.gh-md strong { font-weight: 700; }
+.gh-md em { font-style: italic; }
+.gh-md blockquote {
+  margin: 0 0 12px; padding: 0 12px; color: var(--muted);
+  border-left: 3px solid var(--border);
+}
+.gh-md hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+
+/* ─── Comments thread ─────────────────────────── */
+.gh-comments-head {
+  margin-top: 24px; margin-bottom: 8px;
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+}
+.gh-comment {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  margin-bottom: 12px; overflow: hidden;
+}
+.gh-comment .head {
+  padding: 6px 12px; background: var(--panel-2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px;
+}
+.gh-comment .head .who { font-weight: 600; color: var(--text); }
+.gh-comment .head .when { color: var(--muted); }
+.gh-comment .head .avatar {
+  width: 20px; height: 20px; border-radius: 50%; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--border);
+}
+.gh-comment .head .avatar img { width: 100%; height: 100%; display: block; }
+.gh-comment .body { padding: 12px 14px; }
+
+/* Issue body itself uses the same comment-style card. */
+.gh-issue-body {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  margin-bottom: 16px; overflow: hidden;
+}
+.gh-issue-body .head {
+  padding: 6px 12px; background: var(--panel-2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+}
+.gh-issue-body .head .who { font-weight: 600; }
+.gh-issue-body .head .when { color: var(--muted); }
+.gh-issue-body .head .avatar {
+  width: 20px; height: 20px; border-radius: 50%; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--border);
+}
+.gh-issue-body .head .avatar img { width: 100%; height: 100%; display: block; }
+.gh-issue-body .body { padding: 12px 14px; }
+
+/* ─── Actions strip ───────────────────────────── */
+.gh-actions {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 12px 0; margin-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.gh-actions button {
+  padding: 6px 14px; font-size: 12.5px;
+}
+.gh-actions button.open-gh {
+  background: var(--panel); border-color: var(--border-hi); color: var(--text);
+}
+.gh-actions button:disabled { opacity: 0.5; cursor: not-allowed; }

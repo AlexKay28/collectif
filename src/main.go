@@ -50,6 +50,10 @@ func main() {
 
 	server := NewServer(*bind, *port, authToken, sub)
 
+	// #44 slice A — local GitHub issue/PR mirror. Read-only endpoints
+	// under /api/gh/*; the syncer shells out to the host `gh` CLI.
+	registerGHRoutes(mux)
+
 	startPendingSweeper()
 	startHourlyCostBroadcaster()   // #35
 	startPRPoller()                // #37 PR-ready fallback detection

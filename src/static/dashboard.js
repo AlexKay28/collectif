@@ -658,6 +658,9 @@ function selectAgent(id) {
   renderSidebar();
   renderTermPanel(true);
   renderSendPanel();
+  // #44 gh-mirror listens for this to refresh Issues/PRs against the newly
+  // selected agent's cwd.
+  document.dispatchEvent(new CustomEvent("collectif-agent-selected", { detail: { id } }));
 }
 
 // ─── #35 Budget strip ──────────────────────────────────────

@@ -1,0 +1,433 @@
+/* ─── GitHub PR viewer (slice C of #44) ──────────────────────────
+   Two views sharing a single scrollable container: list + detail.
+   All rules are scoped to #gh-prs-view so the surface is fully
+   isolated from the dashboard/team layouts. Reuses --bg, --panel,
+   --border, --text, --muted, --accent, --running, --waiting,
+   --error from style.css. */
+
+#gh-prs-view {
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Header nav "PRs" button — inline with existing header buttons but
+   uses .nav-btn so slice B can add a sibling with the same class
+   without stepping on styles here. */
+.nav-btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.nav-btn:hover:not(:disabled) { border-color: var(--border-hi); }
+.nav-btn.active { background: var(--panel); border-color: var(--accent); color: var(--accent); }
+
+/* ─── Sync / repo bar ──────────────────────────── */
+.ghp-syncbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ghp-syncbar .title {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--muted); font-weight: 700;
+}
+.ghp-syncbar .repo {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; color: var(--text);
+}
+.ghp-syncbar .spacer { flex: 1; }
+.ghp-syncbar .status { color: var(--muted); font-size: 11.5px; }
+.ghp-syncbar .status.err { color: var(--error); }
+.ghp-syncbar .status.syncing { color: var(--waiting); }
+.ghp-syncbar button.sync {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 12px; font: inherit; cursor: pointer;
+}
+.ghp-syncbar button.sync:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+
+/* ─── List controls (state pills, sort, search) ── */
+.ghp-controls {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+.ghp-pills { display: inline-flex; gap: 0; }
+.ghp-pills button {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+  border-radius: 0;
+}
+.ghp-pills button:first-child { border-radius: 6px 0 0 6px; }
+.ghp-pills button:last-child  { border-radius: 0 6px 6px 0; }
+.ghp-pills button + button { border-left: none; }
+.ghp-pills button.active { color: var(--text); background: var(--panel-2); border-color: var(--border-hi); }
+.ghp-pills button:hover:not(.active) { color: var(--text); }
+.ghp-pills .count {
+  display: inline-block; margin-left: 6px;
+  background: var(--panel-2); border-radius: 10px;
+  padding: 0 6px; font-size: 10.5px; color: var(--muted);
+}
+.ghp-pills button.active .count { color: var(--text); background: var(--bg); }
+
+.ghp-controls .spacer { flex: 1; }
+.ghp-controls select, .ghp-controls input.search {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 8px; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.ghp-controls input.search { width: 220px; }
+.ghp-controls input.search::placeholder { color: var(--muted); }
+.ghp-controls select:focus, .ghp-controls input.search:focus { outline: none; border-color: var(--accent); }
+
+/* ─── List container ─────────────────────────────── */
+.ghp-list {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+.ghp-row {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.ghp-row:first-child { border-top: none; }
+.ghp-row:hover { background: var(--panel-2); }
+.ghp-row .ico {
+  padding-top: 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--running);
+}
+.ghp-row .ico.merged { color: #a371f7; }
+.ghp-row .ico.closed { color: var(--error); }
+.ghp-row .body { min-width: 0; }
+.ghp-row .title-line {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+}
+.ghp-row .title-line .num {
+  color: var(--muted); font-family: ui-monospace, monospace; font-weight: 500;
+}
+.ghp-row .title-line .labels { display: inline-flex; gap: 4px; margin-left: 4px; flex-wrap: wrap; }
+.ghp-row .title-line .label {
+  font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--text); font-weight: 500;
+}
+.ghp-row .meta {
+  margin-top: 3px;
+  color: var(--muted); font-size: 11.5px;
+}
+.ghp-row .meta .mono {
+  font-family: ui-monospace, monospace; color: var(--text);
+}
+.ghp-row .meta .arrow { color: var(--muted); }
+.ghp-row .badges { display: inline-flex; gap: 6px; align-items: flex-start; padding-top: 2px; }
+.ghp-row .badge {
+  font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--muted);
+}
+.ghp-row .badge.draft   { color: var(--muted); }
+.ghp-row .badge.mergeable { color: var(--running); border-color: rgba(63, 185, 80, 0.4); }
+.ghp-row .badge.conflict  { color: var(--error);   border-color: rgba(248, 81, 73, 0.4); }
+.ghp-row .badge.commentcount {
+  color: var(--muted);
+}
+
+.ghp-empty {
+  padding: 40px 20px; text-align: center; color: var(--muted); font-size: 12.5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  border-top: none;
+}
+.ghp-empty .big { font-size: 26px; margin-bottom: 8px; }
+
+/* ─── PR detail view ─────────────────────────────── */
+.ghp-detail-back {
+  background: transparent; color: var(--accent); border: none;
+  padding: 4px 0; font: inherit; cursor: pointer;
+  margin-bottom: 10px;
+}
+.ghp-detail-back:hover { text-decoration: underline; }
+
+.ghp-detail-head { margin-bottom: 12px; }
+.ghp-detail-head .title-row {
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+}
+.ghp-detail-head .title {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--text);
+}
+.ghp-detail-head .title .num { color: var(--muted); font-weight: 500; margin-right: 8px; }
+.ghp-detail-head .meta {
+  margin-top: 6px;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  color: var(--muted); font-size: 12px;
+}
+
+.ghp-state {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 12px;
+  font-size: 11px; font-weight: 600;
+  color: #fff;
+}
+.ghp-state.open   { background: #238636; }
+.ghp-state.merged { background: #8250df; }
+.ghp-state.closed { background: #cf222e; }
+.ghp-state.draft  { background: #6e7681; }
+.ghp-state .dot   { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.9; }
+
+.ghp-branches {
+  font-family: ui-monospace, monospace; font-size: 11.5px;
+  color: var(--muted);
+}
+.ghp-branches .ref {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 6px; color: var(--text);
+}
+
+/* ─── Tabs ──────────────────────────────────────── */
+.ghp-tabs {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.ghp-tabs button {
+  background: transparent; color: var(--muted); border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px; font-size: 12.5px; font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+}
+.ghp-tabs button:hover:not(.active) { color: var(--text); }
+.ghp-tabs button.active {
+  color: var(--text);
+  border-bottom-color: #fd8c73; /* GitHub's active-tab underline hue */
+  font-weight: 600;
+}
+.ghp-tabs button .count {
+  display: inline-block; margin-left: 6px;
+  background: var(--panel-2); border-radius: 10px;
+  padding: 0 6px; font-size: 10.5px; color: var(--muted);
+}
+
+/* ─── Conversation tab ──────────────────────────── */
+.ghp-body {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.ghp-md { font-size: 13px; line-height: 1.55; }
+.ghp-md h1, .ghp-md h2, .ghp-md h3 { margin: 12px 0 6px; font-weight: 600; }
+.ghp-md h1 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.ghp-md h2 { font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+.ghp-md h3 { font-size: 14px; }
+.ghp-md p  { margin: 6px 0; }
+.ghp-md ul, .ghp-md ol { padding-left: 24px; margin: 6px 0; }
+.ghp-md li { margin: 2px 0; }
+.ghp-md li input[type=checkbox] { margin-right: 6px; vertical-align: middle; }
+.ghp-md a { color: var(--accent); text-decoration: none; }
+.ghp-md a:hover { text-decoration: underline; }
+.ghp-md code {
+  background: rgba(110, 118, 129, 0.15);
+  padding: 1px 5px; border-radius: 4px;
+  font-family: ui-monospace, monospace; font-size: 12px;
+}
+.ghp-md pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px; margin: 8px 0; overflow-x: auto;
+}
+.ghp-md pre code { background: transparent; padding: 0; font-size: 12px; }
+.ghp-md strong { font-weight: 700; }
+.ghp-md em { font-style: italic; }
+
+.ghp-empty-body {
+  color: var(--muted); font-style: italic;
+}
+
+/* Comment threads */
+.ghp-comments { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.ghp-comment {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ghp-comment .head {
+  display: flex; gap: 8px; align-items: center;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  font-size: 11.5px; color: var(--muted);
+}
+.ghp-comment .head .who { color: var(--text); font-weight: 600; font-size: 12px; }
+.ghp-comment .head .badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ghp-comment .head .badge.review-approved  { color: var(--running); border-color: rgba(63,185,80,0.5); }
+.ghp-comment .head .badge.review-changes   { color: var(--error);   border-color: rgba(248,81,73,0.5); }
+.ghp-comment .head .badge.review-comment   { color: var(--accent);  border-color: rgba(88,166,255,0.5); }
+.ghp-comment .head .badge.review-line      { color: var(--waiting); border-color: rgba(210,153,34,0.5); }
+.ghp-comment .body { padding: 10px 14px; }
+.ghp-comment .path {
+  font-family: ui-monospace, monospace; font-size: 11px;
+  color: var(--muted); padding: 6px 12px 0;
+}
+.ghp-comment .path .line { color: var(--text); }
+
+/* Actions strip */
+.ghp-actions {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ghp-actions button, .ghp-actions a.btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex; gap: 6px; align-items: center;
+}
+.ghp-actions button:hover:not(:disabled), .ghp-actions a.btn:hover { border-color: var(--accent); color: var(--accent); }
+.ghp-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ghp-actions .spacer { flex: 1; }
+
+/* ─── Commits tab ───────────────────────────────── */
+.ghp-commits {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ghp-commit {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.ghp-commit:first-child { border-top: none; }
+.ghp-commit .sha {
+  font-family: ui-monospace, monospace; font-size: 11.5px;
+  color: var(--accent);
+}
+.ghp-commit .sha a { color: var(--accent); text-decoration: none; }
+.ghp-commit .sha a:hover { text-decoration: underline; }
+.ghp-commit .msg { font-size: 12.5px; color: var(--text); }
+.ghp-commit .msg .author { color: var(--muted); margin-left: 4px; }
+.ghp-commit .when { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+
+/* ─── Files / diff tab ──────────────────────────── */
+.ghp-files { display: flex; flex-direction: column; gap: 8px; }
+.ghp-file {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ghp-file .fhead {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  cursor: pointer;
+  user-select: none;
+}
+.ghp-file .fhead:hover { background: #1f242c; }
+.ghp-file .fhead .chev {
+  color: var(--muted); font-size: 10px;
+  transition: transform 0.1s;
+}
+.ghp-file.expanded .fhead .chev { transform: rotate(90deg); }
+.ghp-file .fhead .path {
+  font-family: ui-monospace, monospace; font-size: 12px;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ghp-file .fhead .stats { font-family: ui-monospace, monospace; font-size: 11px; }
+.ghp-file .fhead .stats .add { color: var(--running); }
+.ghp-file .fhead .stats .del { color: var(--error); margin-left: 6px; }
+
+.ghp-file .fbody { display: none; }
+.ghp-file.expanded .fbody { display: block; }
+.ghp-hunks {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.45;
+  background: var(--bg);
+  overflow-x: auto;
+}
+.ghp-hunks .dline {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  padding: 0;
+  white-space: pre;
+}
+.ghp-hunks .dline .sign {
+  text-align: center; color: var(--muted);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+.ghp-hunks .dline .code { padding: 0 8px; word-break: normal; }
+.ghp-hunks .dline.add    { background: rgba(63, 185, 80, 0.10); }
+.ghp-hunks .dline.add .sign { color: var(--running); }
+.ghp-hunks .dline.add .code { color: #b8ecc4; }
+.ghp-hunks .dline.del    { background: rgba(248, 81, 73, 0.10); }
+.ghp-hunks .dline.del .sign { color: var(--error); }
+.ghp-hunks .dline.del .code { color: #ffb3ae; }
+.ghp-hunks .dline.hunk   { background: var(--panel-2); color: var(--muted); }
+.ghp-hunks .dline.hunk .sign { color: transparent; }
+.ghp-hunks .dline.hunk .code { color: var(--muted); font-style: italic; }
+.ghp-hunks .dline.meta   { color: var(--muted); font-style: italic; padding: 2px 8px; }
+
+.ghp-diff-error {
+  padding: 20px; text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  color: var(--error);
+}
+.ghp-diff-error .msg { margin-bottom: 8px; font-size: 12.5px; }
+.ghp-diff-error button {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 12px; font: inherit; cursor: pointer;
+}
+.ghp-diff-error button:hover { border-color: var(--accent); color: var(--accent); }
+
+.ghp-diff-loading, .ghp-loading {
+  padding: 20px; text-align: center; color: var(--muted); font-size: 12.5px;
+}
