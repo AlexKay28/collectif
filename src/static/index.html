@@ -5,11 +5,13 @@
 <title>collectif</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="gh_issues.css">
 </head>
 <body>
 <div id="app">
   <header>
     <h1>collectif</h1>
+    <nav id="top-nav"><button data-view="overview" class="nav-btn active">Overview</button><button data-view="gh-issues" class="nav-btn">Issues</button></nav>
     <span id="conn-indicator" style="display:none;color:var(--muted);font-size:11px;font-style:italic;margin-left:-6px">reconnecting…</span>
     <div class="stats">
       <div class="stat"><span class="lab">Agents</span><span class="val" id="stat-total">0</span></div>
@@ -150,6 +152,8 @@
           </div>
         </div>
       </div>
+      <div id="gh-issues-view" style="display:none"></div>
+      <div id="gh-issue-detail" style="display:none"></div>
     </section>
   </div>
 </div>
@@ -270,5 +274,6 @@
 <script src="attach.js"></script>
 <script src="draw.js"></script>
 <script src="app.js"></script>
+<script src="gh_issues.js" defer></script>
 </body>
 </html>
