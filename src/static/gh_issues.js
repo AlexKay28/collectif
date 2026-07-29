@@ -377,24 +377,15 @@
   }
 
   // ─── View toggle ──────────────────────────────
-  // Show/hide the three top-level views. Kept intentionally self-contained
-  // per slice-B scope — slice C's PR view does its own thing. Consolidation
-  // happens post-merge.
+  // The Issues surface lives inside #dash-team-panel's "issues" tab pane.
+  // We only toggle between the list and the single-issue detail here; the
+  // outer tab-swap is handled by the right-panel tab switcher in index.html.
   function showView(v) {
     state.view = v;
-    const dash = document.getElementById("dashboard");
     const issuesView = document.getElementById("gh-issues-view");
     const detailView = document.getElementById("gh-issue-detail");
-    if (dash) dash.style.display        = (v === "overview") ? "" : "none";
     if (issuesView) issuesView.style.display = (v === "issues") ? "" : "none";
     if (detailView) detailView.style.display = (v === "issue")  ? "" : "none";
-    // Update nav-btn active state (only touch our own buttons).
-    for (const b of document.querySelectorAll("#top-nav .nav-btn")) {
-      const target = b.getAttribute("data-view");
-      // For the detail view treat "issues" as still-active.
-      const isActive = (v === target) || (v === "issue" && target === "gh-issues");
-      b.classList.toggle("active", isActive);
-    }
   }
 
   // ─── List render ──────────────────────────────
@@ -756,48 +747,24 @@
   }
 
   // ─── Boot ─────────────────────────────────────
-  function wireNav() {
-    // We own only the Issues nav button. Slice C will add PRs; we tolerate
-    // (or add if missing) an Overview button that just resets to overview.
-    const nav = document.getElementById("top-nav");
-    if (!nav) return;
-    for (const b of nav.querySelectorAll(".nav-btn")) {
-      const target = b.getAttribute("data-view");
-      b.addEventListener("click", () => {
-        if (target === "overview") {
-          showView("overview");
-        } else if (target === "gh-issues") {
-          showView("issues");
-          renderShell();
-          // First load: fire status + issues in parallel.
-          if (state.issues.length === 0) {
-            refreshStatus();
-            loadIssues();
-          } else {
-            refreshList();
-            refreshStatus();
-          }
-        }
-        // Other targets (gh-prs, etc.) — slice C handles.
-      });
+  // Invoked by the right-panel tab switcher (index.html) on first click of
+  // the Issues tab. Idempotent: subsequent calls just refresh.
+  function activate() {
+    if (window.AGENTCTL_NO_TOKEN) return;
+    showView("issues");
+    renderShell();
+    if (state.issues.length === 0) {
+      refreshStatus();
+      loadIssues();
+    } else {
+      refreshList();
+      refreshStatus();
     }
   }
 
-  // Wait for DOMContentLoaded because `defer` on our script tag means we
-  // load after body-parsing, but boot()-style init in app.js runs first.
-  function init() {
-    // Only the auth-authenticated app has the nav element; skip when the
-    // auth screen replaced body.
-    if (window.AGENTCTL_NO_TOKEN) return;
-    wireNav();
-  }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
-
-  // Expose a couple of hooks for future slices / debugging.
+  // Expose activate() so the right-panel tab switcher can lazy-init us.
+  window.collectifGhIssues = { activate };
+  // Debug/internal hooks preserved for anything already reaching in.
   window.collectifGH = {
     showView, openIssue, refreshList, loadIssues, refreshStatus,
     _fixtureMode: FIXTURE_MODE,

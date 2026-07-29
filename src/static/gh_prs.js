@@ -845,18 +845,13 @@
     });
   }
 
-  // ─── Nav toggle ──────────────────────────────────
-  // Show/hide the PR view against the sibling #dashboard. Slice B owns its
-  // own toggle for #gh-issues-view; we don't share code (post-merge cleanup).
-  function showPRs() {
+  // ─── Activation ──────────────────────────────────
+  // Invoked by the right-panel tab switcher (index.html) on first click of
+  // the PRs tab inside #dash-team-panel. Idempotent — subsequent calls just
+  // re-render whichever internal view (list vs detail) is current.
+  function activate() {
     const view = root();
     if (!view) return;
-    const dashboard = document.getElementById("dashboard");
-    const issuesView = document.getElementById("gh-issues-view"); // slice B, may not exist yet
-    if (dashboard) dashboard.style.display = "none";
-    if (issuesView) issuesView.style.display = "none";
-    view.style.display = "";
-    updateNavActive("gh-prs");
     if (state.view === "list") {
       renderList();
       if (state.status == null) loadStatus().then(renderSyncBar);
@@ -865,58 +860,6 @@
       renderDetail();
     }
   }
-  function hidePRs() {
-    const view = root();
-    if (view) view.style.display = "none";
-  }
-  function updateNavActive(which) {
-    document.querySelectorAll("header .nav-btn").forEach(b => {
-      b.classList.toggle("active", b.dataset.view === which);
-    });
-  }
 
-  // Expose a small API so sibling slice B and the app boot can flip views
-  // without reaching into private state.
-  window.collectifGhPrs = {
-    show: showPRs,
-    hide: hidePRs,
-    isVisible: () => { const r = root(); return r && r.style.display !== "none"; },
-  };
-
-  // ─── Boot ────────────────────────────────────────
-  function boot() {
-    // Inject the "PRs" button into the header, once, at load time.
-    const header = document.querySelector("header");
-    if (header && !header.querySelector('.nav-btn[data-view="gh-prs"]')) {
-      const btn = document.createElement("button");
-      btn.className = "nav-btn";
-      btn.dataset.view = "gh-prs";
-      btn.textContent = "PRs";
-      // Sit the button right after the last .stat (before the spacer).
-      const spacer = header.querySelector(".spacer");
-      if (spacer) header.insertBefore(btn, spacer);
-      else header.appendChild(btn);
-      btn.onclick = showPRs;
-    }
-    // Clicking the "collectif" logo returns to dashboard — reuse the existing
-    // handler in app.js by simply hiding our view when the dashboard becomes
-    // visible again. We hook the h1 click as a low-priority listener.
-    const h1 = document.querySelector("header h1");
-    if (h1) {
-      h1.addEventListener("click", () => {
-        const view = root();
-        if (view) view.style.display = "none";
-        updateNavActive(null);
-      });
-    }
-    // Initial state: our view is hidden.
-    const view = root();
-    if (view) view.style.display = "none";
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
-  }
+  window.collectifGhPrs = { activate };
 })();
