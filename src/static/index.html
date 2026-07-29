@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="gh_issues.css">
+<link rel="stylesheet" href="gh_prs.css">
 </head>
 <body>
 <div id="app">
@@ -31,6 +32,11 @@
       <div id="sidebar-list"></div>
     </aside>
     <section id="detail">
+      <!-- Slice C of #44: PR viewer. Hidden by default; #gh-prs-view's own
+           JS handles show/hide when the header "PRs" nav button is clicked.
+           Slice B is adding a sibling #gh-issues-view alongside; expect a
+           merge conflict on this line — trivial to resolve. -->
+      <div id="gh-prs-view" style="display:none"></div>
       <div id="dashboard">
         <h2>Overview</h2>
         <div class="subtitle" id="dash-subtitle">Live activity across all agents.</div>
@@ -275,5 +281,8 @@
 <script src="draw.js"></script>
 <script src="app.js"></script>
 <script src="gh_issues.js" defer></script>
+<!-- #44 slice C: GitHub PR viewer. Loaded after app.js so the header
+     already exists when the module injects its "PRs" nav button. -->
+<script src="gh_prs.js"></script>
 </body>
 </html>
