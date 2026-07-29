@@ -56,6 +56,9 @@ func (srv *Server) Router() http.Handler {
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
 	mux.HandleFunc("/healthz", handleHealthz)
 	mux.HandleFunc("/metrics", handleMetrics)
+	// #44 local GitHub issue/PR mirror. Read-only endpoints under /api/gh/*;
+	// the syncer shells out to the host `gh` CLI.
+	registerGHRoutes(mux)
 	return srv.withAuth(mux)
 }
 
