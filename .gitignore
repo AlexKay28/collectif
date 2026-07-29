@@ -223,3 +223,6 @@ __marimo__/
 *.test
 *.out
 /.claude/
+
+# collectif local state — attachments, GitHub cache (#44), etc.
+/.collectif/
