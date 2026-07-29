@@ -310,16 +310,20 @@
   #dash-team-panel .right-tabs .rtab.active {
     color: var(--text, #eee); border-bottom-color: var(--accent, #6aa4ff);
   }
-  /* Team pane keeps its own internal scroll (via .team-canvas), so it just
-     needs to fill the remaining flex space. Issues/PRs panes ARE the scroll
-     container — same pattern as .team-canvas — because their inner list and
-     detail views inject long content directly. */
+  /* Force the outer panel to clip so its flex children can't grow past it
+     (the default overflow: visible was letting the pane bleed and skip
+     scroll entirely). */
+  #dash-team-panel { overflow: hidden; }
+  /* Team pane keeps its own internal scroll (via .team-canvas). */
   #dash-team-panel .rtab-pane[data-rpane="team"] {
-    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
   }
+  /* Issues/PRs panes ARE the scroll container. flex-basis: 0 (not auto)
+     so the pane takes remaining space regardless of content size — with
+     `auto` basis the pane sized to content and never triggered scroll. */
   #dash-team-panel .rtab-pane[data-rpane="issues"],
   #dash-team-panel .rtab-pane[data-rpane="prs"] {
-    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
   }
   /* Neutralize the height:100% / overflow-y:auto that slice B/C set on the
      inner list + detail divs — those made sense when they were top-level
