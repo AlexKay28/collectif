@@ -27,13 +27,6 @@ type hookPayload struct {
 	Cwd            string         `json:"cwd"`
 }
 
-// hookBind/hookPort are populated from main() so the settings generator can
-// point Claude back at our /api/hooks endpoint.
-var (
-	hookBind = "127.0.0.1"
-	hookPort = "7317"
-)
-
 func handleHook(w http.ResponseWriter, r *http.Request) {
 	hooksReceived.Add(1)
 	if r.Method != http.MethodPost {

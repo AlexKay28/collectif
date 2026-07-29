@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"embed"
 	"flag"
 	"io/fs"
@@ -21,8 +20,6 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-var authToken string
-
 func main() {
 	setupLogging()
 	port := flag.String("port", "7317", "TCP port to bind on 127.0.0.1")
@@ -30,6 +27,7 @@ func main() {
 	tokenFlag := flag.String("token", "", "shared-secret auth token (random if empty)")
 	flag.Parse()
 
+	var authToken string
 	if *tokenFlag != "" {
 		authToken = *tokenFlag
 		_ = saveTokenFile(authToken)
@@ -42,9 +40,6 @@ func main() {
 		}
 	}
 
-	hookBind = *bind
-	hookPort = *port
-
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		log.Fatalf("embed: %v", err)
@@ -53,17 +48,7 @@ func main() {
 	// #35 load config once at boot; publishes into the atomic pointer.
 	initConfig()
 
-	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(sub)))
-	mux.HandleFunc("/api/agents", handleAgents)
-	mux.HandleFunc("/api/agents/", handleAgentByID)
-	mux.HandleFunc("/api/cwd/check", handleCwdCheck)
-	mux.HandleFunc("/api/config", handleConfig) // #35
-	mux.HandleFunc("/api/hooks", handleHook)
-	mux.HandleFunc("/ws/session/", handleSessionWS)
-	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
-	mux.HandleFunc("/healthz", handleHealthz)
-	mux.HandleFunc("/metrics", handleMetrics)
+	server := NewServer(*bind, *port, authToken, sub)
 
 	startPendingSweeper()
 	startHourlyCostBroadcaster()   // #35
@@ -79,7 +64,7 @@ func main() {
 	log.Printf("Auth token: %s", authToken)
 	log.Printf("Open http://%s:%s/?token=%s", *bind, *port, authToken)
 
-	srv := &http.Server{Addr: addr, Handler: withAuth(mux)}
+	srv := &http.Server{Addr: addr, Handler: server.Router()}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -159,56 +144,6 @@ func randomToken(n int) string {
 		out[i] = alphabet[idx.Int64()]
 	}
 	return string(out)
-}
-
-// withAuth gates every request except /api/hooks on the shared-secret token.
-// /api/hooks is authenticated separately by its per-session ?ht= UUID so a
-// leaked shared secret cannot forge hook events. Static assets (HTML, CSS,
-// JS) are public — they contain no secrets and browsers can't attach the
-// token to <link>/<script> subresource requests. The token gate matters on
-// /api/* and /ws/*, which is where real data lives.
-func withAuth(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		if p == "/api/hooks" || !isProtectedPath(p) {
-			h.ServeHTTP(w, r)
-			return
-		}
-		if !checkToken(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
-}
-
-func isProtectedPath(p string) bool {
-	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/ws/") || p == "/metrics"
-}
-
-func checkToken(r *http.Request) bool {
-	if authToken == "" {
-		return false
-	}
-	if q := r.URL.Query().Get("token"); q != "" && sameToken(q, authToken) {
-		return true
-	}
-	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") && sameToken(strings.TrimPrefix(h, "Bearer "), authToken) {
-		return true
-	}
-	return false
-}
-
-// sameToken compares two secrets in constant time so a network attacker
-// can't leak the token one character at a time via response-timing analysis.
-// crypto/subtle.ConstantTimeCompare requires equal-length inputs, so we
-// short-circuit on length mismatch first (which is public information).
-func sameToken(got, want string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func shutdownAllSessions(grace time.Duration) {

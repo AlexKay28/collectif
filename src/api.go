@@ -39,7 +39,7 @@ type spawnReq struct {
 	CostCapUSD float64 `json:"cost_cap_usd"`
 }
 
-func handleAgents(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, allSessionsJSON())
@@ -75,7 +75,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			s.CostCapUSD = req.CostCapUSD // #35
 		}
 
-		settingsDir, settingsFile, err := writeHookSettings(hookURL(hookBind, hookPort, hookTok))
+		settingsDir, settingsFile, err := writeHookSettings(srv.hookURL(hookTok))
 		if err != nil {
 			http.Error(w, "settings gen: "+err.Error(), http.StatusInternalServerError)
 			return
