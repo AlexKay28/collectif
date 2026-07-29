@@ -69,14 +69,43 @@ func TestParseGitHubRemote(t *testing.T) {
 // Cache round-trip
 // ---------------------------------------------------------------------------
 
-// seedCache writes minimal fixtures into a fresh cache root and points the
-// ghService singleton at it. Returns the created cache dir so the test can
-// inspect files if needed.
+// testRepo is the fake owner/name every seedCache test uses. Kept as a
+// package-level so the "fallback cwd" path in serviceForRequest can find
+// this repo without shelling out to git — see stubGHServerCwd.
+var testRepo = ghRepo{Owner: "AlexKay28", Name: "collectif"}
+
+// stubGHServerCwd overrides ghServerCwdFn + resolveOriginRepo for a single
+// test so serviceForRequest("") returns the seeded testRepo without calling
+// real git. The returned cleanup restores the previous stubs.
+//
+// This replaces the old pattern of pre-populating a global service handle
+// with a hand-built cache; the registry model wants us to go through
+// services.forCwd so we exercise the real code path.
+func stubGHServerCwd(cacheRoot string) func() {
+	prevCwd := ghServerCwdFn
+	prevRepoRoot := ghRepoRootFn
+	prevResolve := ghResolveOriginFn
+	ghServerCwdFn = func() string { return cacheRoot }
+	ghRepoRootFn = func(cwd string) string { return cacheRoot }
+	ghResolveOriginFn = func(cwd string) (ghRepo, error) { return testRepo, nil }
+	return func() {
+		ghServerCwdFn = prevCwd
+		ghRepoRootFn = prevRepoRoot
+		ghResolveOriginFn = prevResolve
+	}
+}
+
+// seedCache writes minimal fixtures into a fresh cache root and warms the
+// registry so serviceForRequest("") returns a ghService pointing at it.
+// Returns the created cache dir so the test can inspect files if needed.
 func seedCache(t *testing.T, issues []ghIssueIndexEntry, prs []ghPRIndexEntry) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	cache := newGHCache(dir)
+	cache, err := newGHCache(dir, testRepo)
+	if err != nil {
+		t.Fatalf("newGHCache: %v", err)
+	}
 	if err := cache.ensureDirs(); err != nil {
 		t.Fatalf("ensureDirs: %v", err)
 	}
@@ -114,14 +143,37 @@ func seedCache(t *testing.T, issues []ghIssueIndexEntry, prs []ghPRIndexEntry) s
 		}
 	}
 
-	// Rewire the singleton: fresh service, direct-injected cache + syncer.
+	// Reset the registry, stub the "server cwd" hooks, and pre-warm the
+	// registry with our fixture cache so the handlers pick it up without
+	// hitting the (stubbed) resolver a second time.
 	resetGHServiceForTest()
-	globalGHService.cache = cache
-	globalGHService.syncer = newGHSyncer(cache, ghRepo{Owner: "AlexKay28", Name: "collectif"})
-	globalGHService.rootDir = dir
-	globalGHService.initOnce.Do(func() {}) // mark initialised so no cwd lookup happens
-	t.Cleanup(resetGHServiceForTest)
+	restore := stubGHServerCwd(dir)
+	shard := testRepo.Owner + "__" + testRepo.Name
+	services.services[shard] = &ghService{
+		cache:   cache,
+		syncer:  newGHSyncer(cache, testRepo),
+		rootDir: dir,
+	}
+	t.Cleanup(func() {
+		restore()
+		resetGHServiceForTest()
+	})
 	return dir
+}
+
+// seedTestSession pokes a minimal Session into the process registry so
+// serviceForRequest can look it up via ?agent=<id>. The returned cleanup
+// removes the entry so tests don't leak into each other.
+func seedTestSession(id, cwd string) func() {
+	s := &Session{ID: id, Cwd: cwd}
+	registryMu.Lock()
+	registry[id] = s
+	registryMu.Unlock()
+	return func() {
+		registryMu.Lock()
+		delete(registry, id)
+		registryMu.Unlock()
+	}
 }
 
 func TestCacheRoundTrip_IssueByNumber(t *testing.T) {
@@ -297,15 +349,23 @@ func TestStatusOnEmptyCache(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSyncWithStubbedGH(t *testing.T) {
-	// Redirect the singleton to a temp cache, but keep the real syncer so
+	// Redirect the registry to a temp cache, but keep the real syncer so
 	// runSync exercises the fetcher paths against our ghExecFn stub.
 	dir := t.TempDir()
 	resetGHServiceForTest()
-	globalGHService.cache = newGHCache(dir)
-	globalGHService.syncer = newGHSyncer(globalGHService.cache, ghRepo{Owner: "AlexKay28", Name: "collectif"})
-	globalGHService.rootDir = dir
-	globalGHService.initOnce.Do(func() {})
-	t.Cleanup(resetGHServiceForTest)
+	restore := stubGHServerCwd(dir)
+	t.Cleanup(func() { restore(); resetGHServiceForTest() })
+	cache, err := newGHCache(dir, testRepo)
+	if err != nil {
+		t.Fatalf("newGHCache: %v", err)
+	}
+	shard := testRepo.Owner + "__" + testRepo.Name
+	services.services[shard] = &ghService{
+		cache:   cache,
+		syncer:  newGHSyncer(cache, testRepo),
+		rootDir: dir,
+	}
+	svc := services.services[shard]
 
 	// Fixture responses. Order matters: the pipeline calls issues list,
 	// then per-issue comments, then pulls list, then per-PR reviews +
@@ -362,19 +422,19 @@ func TestSyncWithStubbedGH(t *testing.T) {
 	resp.Body.Close()
 
 	// Issues index should have exactly one entry (the PR was filtered out).
-	if _, err := os.Stat(globalGHService.cache.issuePath(43)); err != nil {
+	if _, err := os.Stat(svc.cache.issuePath(43)); err != nil {
 		t.Fatalf("issue 43 not written: %v", err)
 	}
-	if _, err := os.Stat(globalGHService.cache.issuePath(57)); err == nil {
+	if _, err := os.Stat(svc.cache.issuePath(57)); err == nil {
 		t.Fatalf("PR 57 was written to issues/ (should have been filtered out)")
 	}
 	// PR index should have PR 57.
-	if _, err := os.Stat(globalGHService.cache.prPath(57)); err != nil {
+	if _, err := os.Stat(svc.cache.prPath(57)); err != nil {
 		t.Fatalf("pr 57 not written: %v", err)
 	}
 	// Repo meta lastSyncAt should be recent.
 	var meta ghRepoMeta
-	found, err := readJSON(globalGHService.cache.repoMetaPath(), &meta)
+	found, err := readJSON(svc.cache.repoMetaPath(), &meta)
 	if err != nil || !found {
 		t.Fatalf("repo meta: found=%v err=%v", found, err)
 	}
@@ -405,19 +465,41 @@ func TestSyncWithStubbedGH(t *testing.T) {
 func TestSyncCoalesces(t *testing.T) {
 	dir := t.TempDir()
 	resetGHServiceForTest()
-	globalGHService.cache = newGHCache(dir)
-	globalGHService.syncer = newGHSyncer(globalGHService.cache, ghRepo{Owner: "x", Name: "y"})
-	globalGHService.rootDir = dir
-	globalGHService.initOnce.Do(func() {})
-	t.Cleanup(resetGHServiceForTest)
+	// Stub cwd/resolver so serviceForRequest("") returns our fixture repo
+	// without shelling to git. Note the name here is "y", not "collectif" —
+	// the resolver stub always returns the same shard.
+	prevCwd := ghServerCwdFn
+	prevRepoRoot := ghRepoRootFn
+	prevResolve := ghResolveOriginFn
+	repo := ghRepo{Owner: "x", Name: "y"}
+	ghServerCwdFn = func() string { return dir }
+	ghRepoRootFn = func(cwd string) string { return dir }
+	ghResolveOriginFn = func(cwd string) (ghRepo, error) { return repo, nil }
+	t.Cleanup(func() {
+		ghServerCwdFn = prevCwd
+		ghRepoRootFn = prevRepoRoot
+		ghResolveOriginFn = prevResolve
+		resetGHServiceForTest()
+	})
+	cache, err := newGHCache(dir, repo)
+	if err != nil {
+		t.Fatalf("newGHCache: %v", err)
+	}
+	shard := repo.Owner + "__" + repo.Name
+	services.services[shard] = &ghService{
+		cache:   cache,
+		syncer:  newGHSyncer(cache, repo),
+		rootDir: dir,
+	}
+	svc := services.services[shard]
 
 	// Manually claim the sync lock so a subsequent POST /api/gh/sync sees
 	// the "already syncing" branch. We finish it before the test ends so
 	// no goroutine leak.
-	if !globalGHService.syncer.tryStart() {
+	if !svc.syncer.tryStart() {
 		t.Fatalf("test setup: sync unexpectedly already running")
 	}
-	defer globalGHService.syncer.finish(nil)
+	defer svc.syncer.finish(nil)
 
 	mux := http.NewServeMux()
 	registerGHRoutes(mux)
@@ -441,14 +523,13 @@ func TestSyncCoalesces(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPRDiffServesCachedFile(t *testing.T) {
-	dir := t.TempDir()
 	seedCache(t, nil, []ghPRIndexEntry{
 		{Number: 57, Title: "PR", State: "open", HeadRef: "feature", BaseRef: "main", HeadSHA: "aaa", BaseSHA: "bbb", UpdatedAt: "2020-01-01T00:00:00Z"},
 	})
-	_ = dir
 
 	// Write a diff file with a mod time AFTER the PR's updated_at.
-	diffPath := globalGHService.cache.diffPath(57)
+	shard := testRepo.Owner + "__" + testRepo.Name
+	diffPath := services.services[shard].cache.diffPath(57)
 	if err := os.MkdirAll(filepath.Dir(diffPath), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -517,5 +598,113 @@ func TestDecodeConcatenatedArrays(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("got %d items want 0", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #44 per-agent scoping — ?agent=<id> path
+// ---------------------------------------------------------------------------
+
+// TestServiceForRequestAgent seeds a fake session pointing at a "different"
+// project cwd and confirms /api/gh/status?agent=<id> resolves to that repo
+// (not the server's fallback repo). The resolver stub returns a distinct
+// (owner, name) for the agent's cwd so we can prove the wiring end-to-end.
+func TestServiceForRequestAgent(t *testing.T) {
+	serverDir := t.TempDir()
+	agentDir := t.TempDir()
+
+	prevCwd := ghServerCwdFn
+	prevRepoRoot := ghRepoRootFn
+	prevResolve := ghResolveOriginFn
+	ghServerCwdFn = func() string { return serverDir }
+	ghRepoRootFn = func(cwd string) string { return cwd }
+	ghResolveOriginFn = func(cwd string) (ghRepo, error) {
+		if cwd == agentDir {
+			return ghRepo{Owner: "agentowner", Name: "agentrepo"}, nil
+		}
+		return ghRepo{Owner: "serverowner", Name: "serverrepo"}, nil
+	}
+	resetGHServiceForTest()
+	t.Cleanup(func() {
+		ghServerCwdFn = prevCwd
+		ghRepoRootFn = prevRepoRoot
+		ghResolveOriginFn = prevResolve
+		resetGHServiceForTest()
+	})
+
+	cleanup := seedTestSession("agent-xyz", agentDir)
+	defer cleanup()
+
+	mux := http.NewServeMux()
+	registerGHRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/gh/status?agent=agent-xyz")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, string(body))
+	}
+	var v map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&v)
+	repo, _ := v["repo"].(map[string]any)
+	if repo["owner"] != "agentowner" || repo["name"] != "agentrepo" {
+		t.Fatalf("repo = %+v, want owner=agentowner name=agentrepo", repo)
+	}
+
+	// Sanity: the cache was sharded under the AGENT's repo key, and it
+	// landed beneath the SERVER's cache root — not the agent's cwd.
+	wantShard := filepath.Join(serverDir, ".collectif", "cache", "gh", "agentowner__agentrepo")
+	if _, err := os.Stat(wantShard); err != nil {
+		t.Fatalf("expected sharded cache at %s: %v", wantShard, err)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, ".collectif")); err == nil {
+		t.Fatalf("cache leaked into agent cwd — should stay server-anchored")
+	}
+}
+
+// TestServiceForRequestAgentNotFound proves the 404 branch fires when the
+// query param names a session id the registry doesn't know about. The body
+// is the {"error": "..."} JSON the frontend expects.
+func TestServiceForRequestAgentNotFound(t *testing.T) {
+	dir := t.TempDir()
+	prevCwd := ghServerCwdFn
+	prevRepoRoot := ghRepoRootFn
+	prevResolve := ghResolveOriginFn
+	ghServerCwdFn = func() string { return dir }
+	ghRepoRootFn = func(cwd string) string { return dir }
+	ghResolveOriginFn = func(cwd string) (ghRepo, error) { return testRepo, nil }
+	resetGHServiceForTest()
+	t.Cleanup(func() {
+		ghServerCwdFn = prevCwd
+		ghRepoRootFn = prevRepoRoot
+		ghResolveOriginFn = prevResolve
+		resetGHServiceForTest()
+	})
+
+	mux := http.NewServeMux()
+	registerGHRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/gh/status?agent=nonexistent")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("status %d want 404", resp.StatusCode)
+	}
+	var v map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	msg, _ := v["error"].(string)
+	if !strings.Contains(msg, "nonexistent") {
+		t.Fatalf("error = %q, want it to mention the missing id", msg)
 	}
 }

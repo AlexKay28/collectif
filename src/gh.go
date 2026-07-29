@@ -122,15 +122,36 @@ func repoRoot(cwd string) string {
 // Cache layout
 // ---------------------------------------------------------------------------
 
-// ghCache owns the on-disk layout under <root>/.collectif/cache/gh/. All
-// paths are absolute. Two syncers must never touch the same root — the
+// ghCache owns the on-disk layout under <root>/.collectif/cache/gh/<shard>/.
+// All paths are absolute. Two syncers must never touch the same root — the
 // syncer mutex guards that; concurrent readers (HTTP handlers) share it.
+//
+// The <shard> segment (owner + "__" + name) scopes the cache to a specific
+// GitHub repo. The <root> stays anchored to the server's own repo root so we
+// don't scatter .collectif/ dirs into random project repos the user visits;
+// the shard lets one server process mirror multiple repos side by side
+// (each agent may have a different cwd/origin).
 type ghCache struct {
-	root string // <repo-root>/.collectif/cache/gh
+	root string // <server-repo-root>/.collectif/cache/gh/<owner>__<name>
 }
 
-func newGHCache(rootAbove string) *ghCache {
-	return &ghCache{root: filepath.Join(rootAbove, ".collectif", "cache", "gh")}
+// shardKeyRe validates the sharded subdir segment. parseGitHubRemote already
+// only accepts owner/name matching this shape, but we double-check here so a
+// future caller that constructs a ghRepo directly can't smuggle path
+// separators into the filesystem layout.
+var shardKeyRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// newGHCache builds a cache rooted at <rootAbove>/.collectif/cache/gh/<shard>.
+// The shard is derived from repo.Owner/repo.Name. Returns an error if either
+// component contains characters outside the safe filename set — this should
+// never trip in practice because parseGitHubRemote screens for it, but the
+// belt-and-braces check keeps the on-disk layout honest.
+func newGHCache(rootAbove string, repo ghRepo) (*ghCache, error) {
+	if !shardKeyRe.MatchString(repo.Owner) || !shardKeyRe.MatchString(repo.Name) {
+		return nil, fmt.Errorf("unsafe repo shard: owner=%q name=%q", repo.Owner, repo.Name)
+	}
+	shard := repo.Owner + "__" + repo.Name
+	return &ghCache{root: filepath.Join(rootAbove, ".collectif", "cache", "gh", shard)}, nil
 }
 
 func (c *ghCache) repoMetaPath() string   { return filepath.Join(c.root, "repo.json") }
@@ -640,51 +661,130 @@ func ghDefaultBranch(ctx context.Context, repo ghRepo) string {
 // Server plumbing
 // ---------------------------------------------------------------------------
 
-// ghService is the process-wide handle registered from main. Constructed
-// lazily on first request so a server started outside a git repo still
-// boots — the endpoint just returns a helpful 500 explaining the missing
-// remote.
+// ghService is the per-repo handle. One is created per (owner, name) shard
+// the first time an HTTP request resolves to that repo. Subsequent requests
+// for the same repo reuse the entry from the registry so the syncer's mutex
+// is process-wide rather than per-request.
+//
+// rootDir is the git top-level of the *agent's* cwd (used by handleGHPRDiff
+// to run `git diff` and `git fetch` in the right working tree). It is not
+// the same as the cache root, which is anchored to the *server's* repo — see
+// the comment on newGHCache. Keeping them separate lets a single server
+// mirror many agent repos without polluting each one with .collectif/ dirs.
 type ghService struct {
-	mu       sync.Mutex
-	cache    *ghCache
-	syncer   *ghSyncer
-	rootDir  string
-	initOnce sync.Once
-	initErr  error
+	cache   *ghCache
+	syncer  *ghSyncer
+	rootDir string // git top-level of the resolved agent cwd
 }
 
-var globalGHService = &ghService{}
+// ghServiceRegistry lazily hands out per-repo ghService values. The map is
+// keyed by the same shard string used in the cache path (owner + "__" + name)
+// so two cwds pointing at the same origin share one entry.
+type ghServiceRegistry struct {
+	mu       sync.Mutex
+	services map[string]*ghService
+}
+
+var services = &ghServiceRegistry{services: map[string]*ghService{}}
 
 // ghServerCwdFn lets tests override the working directory used for repo
-// resolution. Production code returns "." (the server's own cwd).
+// resolution when no ?agent / ?cwd query param is supplied. Production code
+// returns "." (the server's own cwd).
 var ghServerCwdFn = func() string { return "." }
 
-// initFromCwd populates cache + syncer if this is the first request. Any
-// error is memoised in initErr so subsequent requests short-circuit.
-func (g *ghService) initFromCwd() error {
-	g.initOnce.Do(func() {
-		cwd := ghServerCwdFn()
-		repo, err := resolveOriginRepo(cwd)
-		if err != nil {
-			g.initErr = err
-			return
-		}
-		root := repoRoot(cwd)
-		g.rootDir = root
-		g.cache = newGHCache(root)
-		g.syncer = newGHSyncer(g.cache, repo)
-		if err := g.cache.ensureDirs(); err != nil {
-			g.initErr = err
-			return
-		}
-	})
-	return g.initErr
+// ghRepoRootFn and ghResolveOriginFn are the git-shell-out seams. Tests
+// override them so seedCache doesn't need a real git repo on disk.
+var (
+	ghRepoRootFn      = repoRoot
+	ghResolveOriginFn = resolveOriginRepo
+)
+
+// forCwd returns (creating if needed) the ghService for the repo whose
+// origin resolves from cwd. cwd == "" means "use the server's cwd" — the
+// original single-repo behaviour that keeps existing callers/tests working.
+//
+// The cache root stays anchored to the SERVER's repo root even when cwd
+// points at some other project. That's intentional (see newGHCache): we
+// don't want to spray .collectif/ dirs into arbitrary project checkouts
+// the user browses. rootDir, on the other hand, is the git top-level of
+// the resolved cwd so PR diffs run against refs that actually exist there.
+func (reg *ghServiceRegistry) forCwd(cwd string) (*ghService, error) {
+	if cwd == "" {
+		cwd = ghServerCwdFn()
+	}
+	repo, err := ghResolveOriginFn(cwd)
+	if err != nil {
+		return nil, err
+	}
+	shard := repo.Owner + "__" + repo.Name
+
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if svc, ok := reg.services[shard]; ok {
+		return svc, nil
+	}
+
+	cacheRootAbove := ghRepoRootFn(ghServerCwdFn()) // server-anchored — see doc above
+	cache, err := newGHCache(cacheRootAbove, repo)
+	if err != nil {
+		return nil, err
+	}
+	if err := cache.ensureDirs(); err != nil {
+		return nil, err
+	}
+	svc := &ghService{
+		cache:   cache,
+		syncer:  newGHSyncer(cache, repo),
+		rootDir: ghRepoRootFn(cwd), // agent-anchored — used by git diff/fetch
+	}
+	reg.services[shard] = svc
+	return svc, nil
 }
 
-// resetGHServiceForTest wipes the process-wide singleton so a test can
-// point it at a fresh temp dir and stub gh. Test-only.
+// httpError bundles an HTTP status code with an error so per-request
+// resolution can distinguish 404 (agent not found) from 500 (repo resolve
+// failed). Handlers unwrap it when writing the response.
+type httpError struct {
+	status int
+	msg    string
+}
+
+func (e *httpError) Error() string { return e.msg }
+
+// writeServiceError sends err as an HTTP response. It handles httpError
+// (JSON body with the {"error": ...} shape the frontend expects) and falls
+// back to http.Error for the generic 500 case so we don't break existing
+// callers relying on plain-text error bodies.
+func writeServiceError(w http.ResponseWriter, err error) {
+	var he *httpError
+	if errors.As(err, &he) {
+		writeJSON(w, he.status, map[string]any{"error": he.msg})
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// serviceForRequest picks the right ghService for this HTTP call.
+// Priority: ?agent=<id> (session lookup) > ?cwd=<path> > server cwd.
+func serviceForRequest(r *http.Request) (*ghService, error) {
+	q := r.URL.Query()
+	if id := q.Get("agent"); id != "" {
+		s := getSession(id)
+		if s == nil {
+			return nil, &httpError{status: http.StatusNotFound, msg: "agent not found: " + id}
+		}
+		return services.forCwd(s.Cwd)
+	}
+	if cwd := q.Get("cwd"); cwd != "" {
+		return services.forCwd(cwd)
+	}
+	return services.forCwd("")
+}
+
+// resetGHServiceForTest wipes the process-wide registry so a test can point
+// it at a fresh temp dir and stub gh. Test-only.
 func resetGHServiceForTest() {
-	globalGHService = &ghService{}
+	services = &ghServiceRegistry{services: map[string]*ghService{}}
 }
 
 // ---------------------------------------------------------------------------
@@ -699,17 +799,18 @@ func handleGHStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-	syncing, _, _ := globalGHService.syncer.status()
+	syncing, _, _ := svc.syncer.status()
 	var meta ghRepoMeta
-	_, _ = readJSON(globalGHService.cache.repoMetaPath(), &meta)
+	_, _ = readJSON(svc.cache.repoMetaPath(), &meta)
 
 	// Prefer the syncer's live repo identity — the meta.json only exists
 	// after the first successful sync.
-	repo := globalGHService.syncer.repo
+	repo := svc.syncer.repo
 	writeJSON(w, http.StatusOK, map[string]any{
 		"repo": map[string]string{
 			"owner": repo.Owner,
@@ -730,11 +831,12 @@ func handleGHSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-	s := globalGHService.syncer
+	s := svc.syncer
 	if !s.tryStart() {
 		writeJSON(w, http.StatusOK, map[string]any{"started": false, "reason": "already syncing"})
 		return
@@ -764,12 +866,13 @@ func handleGHIssues(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
 	var entries []ghIssueIndexEntry
-	found, err := readJSON(globalGHService.cache.issueIndexPath(), &entries)
+	found, err := readJSON(svc.cache.issueIndexPath(), &entries)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -789,8 +892,9 @@ func handleGHIssueByNumber(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
 	n, ok := parseTrailingNumber(r.URL.Path, "/api/gh/issues/")
@@ -798,7 +902,7 @@ func handleGHIssueByNumber(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid issue number", http.StatusBadRequest)
 		return
 	}
-	serveJSONFile(w, globalGHService.cache.issuePath(n))
+	serveJSONFile(w, svc.cache.issuePath(n))
 }
 
 func handleGHPRs(w http.ResponseWriter, r *http.Request) {
@@ -806,12 +910,13 @@ func handleGHPRs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
 	var entries []ghPRIndexEntry
-	found, err := readJSON(globalGHService.cache.prIndexPath(), &entries)
+	found, err := readJSON(svc.cache.prIndexPath(), &entries)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -832,8 +937,9 @@ func handleGHPRSubpath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := globalGHService.initFromCwd(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	svc, err := serviceForRequest(r)
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/gh/prs/")
@@ -855,9 +961,9 @@ func handleGHPRSubpath(w http.ResponseWriter, r *http.Request) {
 	}
 	switch sub {
 	case "":
-		serveJSONFile(w, globalGHService.cache.prPath(n))
+		serveJSONFile(w, svc.cache.prPath(n))
 	case "diff":
-		handleGHPRDiff(w, r, n)
+		handleGHPRDiff(w, r, svc, n)
 	default:
 		http.Error(w, "unknown pr subpath", http.StatusNotFound)
 	}
@@ -866,8 +972,12 @@ func handleGHPRSubpath(w http.ResponseWriter, r *http.Request) {
 // handleGHPRDiff serves a unified diff for PR n. Prefers a cached diff file
 // (fresh vs the cached PR's updated_at); otherwise computes with local git,
 // fetching the PR ref on demand when the head SHA isn't present.
-func handleGHPRDiff(w http.ResponseWriter, r *http.Request, n int) {
-	cache := globalGHService.cache
+//
+// svc is passed by handleGHPRSubpath so the caller only resolves the service
+// once (and, crucially, we run git in svc.rootDir — the agent's git top-level
+// — not the server's cwd, so PR refs from that repo actually exist).
+func handleGHPRDiff(w http.ResponseWriter, r *http.Request, svc *ghService, n int) {
+	cache := svc.cache
 	// Load cached PR — we need base/head SHAs to compute the diff anyway.
 	var pr map[string]any
 	found, err := readJSON(cache.prPath(n), &pr)
@@ -898,7 +1008,7 @@ func handleGHPRDiff(w http.ResponseWriter, r *http.Request, n int) {
 		return
 	}
 
-	diff, err := computePRDiff(r.Context(), globalGHService.rootDir, n, base, head)
+	diff, err := computePRDiff(r.Context(), svc.rootDir, n, base, head)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
