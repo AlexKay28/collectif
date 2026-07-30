@@ -97,15 +97,20 @@ function renderTokensByAgent() {
           const tok = (a.inputTokens || 0) + (a.outputTokens || 0);
           const pct = tok <= 0 ? 0 : Math.max(1, Math.round((tok / maxTok) * 100));
           return (
-            '<div class="row" data-id="' + esc(a.id) + '">' +
+            '<button type="button" class="row" aria-label="Open agent ' + esc(agentName(a)) + ' — ' + fmtNum(tok) + ' tokens" data-id="' + esc(a.id) + '">' +
               '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
               '<div class="track"><div class="fill" style="width:' + pct + '%"></div><span class="lbl">' + esc(agentName(a)) + '</span></div>' +
               '<div class="num">' + fmtNum(tok) + '</div>' +
-            '</div>'
+            '</button>'
           );
         }).join('');
   document.querySelectorAll("#dash-bars .row").forEach(r => {
     r.onclick = () => selectAgent(r.dataset.id);
+    r.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      selectAgent(r.dataset.id);
+    });
   });
 }
 
@@ -140,11 +145,11 @@ function renderFeed() {
     if (e.tool) what += ' <span class="tool">' + esc(e.tool) + '</span>';
     if (e.detail) what += ' <span class="det">— ' + esc(e.detail) + '</span>';
     return (
-      '<div class="row' + (isNew ? ' new' : '') + '" data-id="' + esc(e.agent.id) + '">' +
-        '<div class="t">' + humanTime(e.t) + '</div>' +
-        '<div class="who"><div class="avatar"><img src="' + avatarURL(e.agent.id) + '" alt=""></div><span class="n">' + esc(agentName(e.agent)) + '</span></div>' +
-        '<div class="what ' + esc(lvl) + '">' + what + '</div>' +
-      '</div>'
+      '<button type="button" class="row' + (isNew ? ' new' : '') + '" aria-label="Open ' + esc(agentName(e.agent)) + ' — ' + esc(e.event || "event") + (e.tool ? ' ' + esc(e.tool) : '') + '" data-id="' + esc(e.agent.id) + '">' +
+        '<span class="t">' + humanTime(e.t) + '</span>' +
+        '<span class="who"><span class="avatar"><img src="' + avatarURL(e.agent.id) + '" alt=""></span><span class="n">' + esc(agentName(e.agent)) + '</span></span>' +
+        '<span class="what ' + esc(lvl) + '">' + what + '</span>' +
+      '</button>'
     );
   }).join('');
 
@@ -159,6 +164,12 @@ function renderFeed() {
       if (ev.target.closest(".btns-inline")) return;
       selectAgent(r.dataset.id);
     };
+    r.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest(".btns-inline")) return;
+      ev.preventDefault();
+      selectAgent(r.dataset.id);
+    });
   });
   document.querySelectorAll("#dash-feed .action.pending .btns button[data-act]").forEach(btn => {
     btn.onclick = async (ev) => {
@@ -211,6 +222,12 @@ function renderFeed() {
       if (ev.target.closest("button")) return;
       selectAgent(r.dataset.id);
     };
+    r.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest("button")) return;
+      ev.preventDefault();
+      selectAgent(r.dataset.id);
+    });
   });
 }
 
@@ -247,7 +264,7 @@ function renderContextPressure() {
     const pct = Math.round((a.contextUsedPct || 0) * 100);
     const cls = pct >= 90 ? "hot" : "warm";
     return (
-      '<div class="ctx-row ' + cls + '" data-id="' + esc(a.id) + '">' +
+      '<div class="ctx-row ' + cls + '" role="button" tabindex="0" aria-label="Select agent ' + esc(agentName(a)) + ' (context ' + pct + '%)" data-id="' + esc(a.id) + '">' +
         '<div class="avatar-mini"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="body">' +
           '<div class="name">' + esc(agentName(a)) + '</div>' +
@@ -259,6 +276,11 @@ function renderContextPressure() {
   }).join("");
   container.querySelectorAll(".ctx-row").forEach(el => {
     el.addEventListener("click", () => selectAgent(el.dataset.id));
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      selectAgent(el.dataset.id);
+    });
   });
 }
 
@@ -287,7 +309,7 @@ function renderHealthCheck() {
     const score = a.healthScore == null ? 100 : a.healthScore;
     const cls = score < 50 ? "danger" : "warn";
     return (
-      '<div class="health-row ' + cls + '" data-id="' + esc(a.id) + '">' +
+      '<div class="health-row ' + cls + '" role="button" tabindex="0" aria-label="Select agent ' + esc(agentName(a)) + ' (health ' + score + ')" data-id="' + esc(a.id) + '">' +
         '<div class="avatar-mini"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="body">' +
           '<div class="name">' + esc(agentName(a)) + '</div>' +
@@ -299,6 +321,11 @@ function renderHealthCheck() {
   }).join("");
   container.querySelectorAll(".health-row").forEach(el => {
     el.addEventListener("click", () => selectAgent(el.dataset.id));
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      selectAgent(el.dataset.id);
+    });
   });
 }
 
@@ -333,15 +360,15 @@ function renderReviewQueue() {
     const label = a.prTitle || a.prURL || "(PR opened)";
     const age = humanAge(a.updatedAt || a.createdAt);
     return (
-      '<div class="review-row" data-id="' + esc(a.id) + '">' +
+      '<div class="review-row" role="button" tabindex="0" aria-label="Select agent ' + esc(agentName(a)) + ' (review ready)" data-id="' + esc(a.id) + '">' +
         '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="rq-body">' +
           '<div class="rq-name">' + esc(agentName(a)) + '<span class="rq-age">· ' + esc(age) + '</span></div>' +
           '<div class="rq-title" title="' + esc(a.prURL || "") + '">' + esc(label) + '</div>' +
         '</div>' +
         '<div class="rq-btns">' +
-          '<button class="rq-open" data-url="' + esc(a.prURL || "") + '">Open PR</button>' +
-          '<button class="rq-done" data-id="' + esc(a.id) + '">Mark reviewed</button>' +
+          '<button class="rq-open" type="button" aria-label="Open pull request in a new tab" data-url="' + esc(a.prURL || "") + '">Open PR</button>' +
+          '<button class="rq-done" type="button" aria-label="Mark pull request reviewed" data-id="' + esc(a.id) + '">Mark reviewed</button>' +
         '</div>' +
       '</div>'
     );
@@ -352,6 +379,12 @@ function renderReviewQueue() {
       if (ev.target.closest("button")) return;
       selectAgent(r.dataset.id);
     };
+    r.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest("button")) return;
+      ev.preventDefault();
+      selectAgent(r.dataset.id);
+    });
   });
   container.querySelectorAll(".rq-open").forEach(btn => {
     btn.onclick = (ev) => {
@@ -400,7 +433,7 @@ async function sendToAgent(id, data) {
 // optional single-line tool preview, and the buttons.
 function actionShellHead(a, kind, klass) {
   return (
-    '<div class="action ' + klass + '" data-id="' + esc(a.id) + '">' +
+    '<div class="action ' + klass + '" role="button" tabindex="0" aria-label="Open ' + esc(agentName(a)) + ' — ' + esc(klass) + '" data-id="' + esc(a.id) + '">' +
       '<div class="t">' + humanTime((a.pending && a.pending.at) || (a.askQuestion && a.askQuestion.at) || a.updatedAt) + '</div>' +
       '<div class="who"><div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div><span class="n">' + esc(agentName(a)) + '</span></div>'
   );
@@ -519,6 +552,15 @@ function renderSidebar() {
       + (a.status === "review_ready" ? " status-review-ready" : ""); // #37
     c.dataset.id = a.id;
     c.draggable = true;
+    // #45 F4 — expose the tile itself to assistive tech / clickcast: it's the
+    // primary hit-target that opens the terminal. Kept as <div> because
+    // <button> would fight drag-and-drop reordering and inherit default UA
+    // styling that clashes with .agent-card. role+tabindex+aria-label +
+    // keyboard handler below give it the same accessible surface.
+    c.setAttribute("role", "button");
+    c.setAttribute("tabindex", "0");
+    c.setAttribute("aria-label", "Select agent " + agentName(a));
+    if (selectedId === a.id) c.setAttribute("aria-current", "true");
     const task = a.currentTask || a.prompt || "";
     const activityText = a.lastActivity || (a.lastTool ? "✓ " + a.lastTool : "");
     const tokTotal = (a.inputTokens || 0) + (a.outputTokens || 0);
@@ -542,8 +584,8 @@ function renderSidebar() {
       ? '<span class="health-pill' + (health < 50 ? ' danger' : '') + '" title="' + esc(a.healthReason || "degraded") + '">⚠ ' + esc(a.healthReason || "degraded") + '</span>'
       : "";
     c.innerHTML = (
-      '<button class="quiet-btn" draggable="false" title="' + esc(quietTitle) + '">' + quietIcon + '</button>' +
-      '<button class="kill-btn" draggable="false" title="Kill agent">×</button>' +
+      '<button class="quiet-btn" type="button" draggable="false" aria-label="' + esc(quietTitle) + '" title="' + esc(quietTitle) + '">' + quietIcon + '</button>' +
+      '<button class="kill-btn" type="button" draggable="false" aria-label="Kill agent ' + esc(agentName(a)) + '" title="Kill agent">×</button>' +
       '<div class="card-head">' +
         '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="card-body">' +
@@ -566,6 +608,15 @@ function renderSidebar() {
     c.addEventListener("click", (ev) => {
       if (ev.target.closest(".kill-btn")) return;
       if (ev.target.closest(".quiet-btn")) return;
+      selectAgent(a.id);
+    });
+    // #45 F4 — Enter / Space activate the card the same way as a click,
+    // since we exposed it as role="button" above.
+    c.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest(".kill-btn")) return;
+      if (ev.target.closest(".quiet-btn")) return;
+      ev.preventDefault();
       selectAgent(a.id);
     });
     // #36 Quiet-mode toggle.
