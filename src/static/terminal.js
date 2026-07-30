@@ -94,6 +94,12 @@ function fitTerminalNow() {
   if (!fitAddon || !term) return;
   try { fitAddon.fit(); } catch (_) { return; }
   const cols = term.cols, rows = term.rows;
+  // Skip when the container isn't laid out yet (fitAddon returns 0×0 during
+  // initial mount, when the panel is display:none, or during a mid-layout
+  // race). Server bounds are cols 20-500, rows 5-300 — match those exactly so
+  // we never fire a request the server will reject. Do NOT stash into
+  // lastCols/lastRows so the next tick with real dimensions still fires.
+  if (cols < 20 || rows < 5 || cols > 500 || rows > 300) return;
   if (cols === lastCols && rows === lastRows) return;
   lastCols = cols; lastRows = rows;
   if (!termAgentId) return;
