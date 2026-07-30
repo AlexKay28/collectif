@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <title>collectif</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>html{color-scheme:dark}html,body{background:#0e0f11;color:#e6e6e6}</style>
+<link rel="stylesheet" href="xterm.min.css">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="gh_issues.css">
 <link rel="stylesheet" href="gh_prs.css">
@@ -25,7 +26,7 @@
 
   <div id="main">
     <aside id="sidebar">
-      <button class="add-agent-suggest" id="new-btn" title="Spawn a new Claude Code session">
+      <button class="add-agent-suggest" id="new-btn" aria-label="Add Agent" data-testid="add-agent" title="Spawn a new Claude Code session">
         <span class="plus">+</span> Add Agent
       </button>
       <div id="sidebar-list"></div>
