@@ -66,6 +66,15 @@ button.confirming:hover:not(:disabled) { background: #ff6b64; border-color: #ff6
 /* ─── Sidebar ───────────────────────────────────── */
 .agent-card { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; position: relative; transition: background 0.08s; }
 .agent-card:hover { background: var(--panel-2); }
+/* #45 F4 — role="button" cards need a visible focus ring for keyboard users. */
+.agent-card:focus-visible,
+#dash-bars .row:focus-visible,
+#dash-feed .row:focus-visible,
+#dash-feed .action:focus-visible,
+.ctx-row:focus-visible,
+.health-row:focus-visible,
+.review-row:focus-visible,
+.tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agent-card.selected { background: var(--panel-2); }
 .agent-card.selected::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
 .agent-card.pending { box-shadow: inset 3px 0 0 var(--waiting); animation: pulse-bg 1.6s ease-in-out infinite; }
@@ -248,7 +257,9 @@ button.confirming:hover:not(:disabled) { background: #ff6b64; border-color: #ff6
 .pending-item button { padding: 6px 12px; font-size: 12px; }
 
 .feed { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; max-height: 340px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11.5px; }
-.feed .row { display: grid; grid-template-columns: 62px 130px 1fr; gap: 12px; padding: 5px 14px; border-bottom: 1px solid var(--border); }
+/* .feed .row is a <button> for a11y (see dashboard.js). Reset UA styling. */
+.feed .row { display: grid; grid-template-columns: 62px 130px 1fr; gap: 12px; padding: 5px 14px; border-bottom: 1px solid var(--border); cursor: pointer; width: 100%; background: transparent; border-left: 0; border-right: 0; border-top: 0; color: inherit; font: inherit; text-align: left; }
+.feed .row:hover { background: var(--panel-2); }
 .feed .row:last-child { border-bottom: none; }
 .feed .row .t { color: var(--muted); font-size: 10.5px; padding-top: 1px; }
 .feed .row .who { color: var(--text); display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -303,7 +314,7 @@ header h1:hover { color: var(--accent); }
    PTY-detected numbered menu. Sits above the chronological events, styled
    to blend visually with feed rows so the user's eye already knows where
    to look. */
-.feed .action { display: grid; grid-template-columns: 62px 130px 1fr; gap: 12px; padding: 6px 14px 8px; border-bottom: 1px solid var(--border); background: rgba(210, 153, 34, 0.06); font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+.feed .action { display: grid; grid-template-columns: 62px 130px 1fr; gap: 12px; padding: 6px 14px 8px; border-bottom: 1px solid var(--border); background: rgba(210, 153, 34, 0.06); font-family: -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer; }
 .feed .action.ask  { background: rgba(88, 166, 255, 0.06); }
 .feed .action.menu { background: rgba(88, 166, 255, 0.05); }
 .feed .action .t { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; padding-top: 3px; }
@@ -384,7 +395,10 @@ header h1:hover { color: var(--accent); }
 .chart-card svg .axis { fill: var(--muted); font-size: 9px; font-family: ui-monospace, monospace; }
 
 .bars { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
-.bars .row { display: grid; grid-template-columns: 22px 1fr 70px; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+/* .bars .row is a <button> for a11y (see dashboard.js). Reset UA styling so
+   it looks identical to the sibling non-interactive rows: no border, no
+   background, inherited font/color, left-aligned text. */
+.bars .row { display: grid; grid-template-columns: 22px 1fr 70px; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; width: 100%; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; }
 .bars .row:hover .track { border-color: var(--border-hi); }
 .bars .row .avatar { width: 18px; height: 18px; border-width: 1px; }
 .bars .row .track { background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; height: 14px; overflow: hidden; position: relative; }
