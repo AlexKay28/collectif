@@ -77,17 +77,26 @@ function connectDashboardWS() {
 
 // ─── New-agent modal ────────────────────────────
 // As-you-type cwd validation. Debounced 300 ms; hits GET /api/cwd/check and
-// shows ✓/✕ in the .cwd-hint sibling. Does NOT block form submission — a
-// stale/absent endpoint just leaves the hint empty.
+// shows ✓/✕ in the .cwd-hint sibling. Also gates the Spawn button so the
+// user can't submit a path we already know is invalid — see #45 finding 2.
+// The gate is bypassed when the check endpoint itself is missing (old
+// servers) so the server-side rejection stays the fallback.
 let cwdInput = null;
 let cwdHint = null;
+let createBtn = null;
+let cwdValid = false;
 let cwdCheckTimer = 0;
 let cwdCheckSeq = 0;
 let cwdCheckEndpointMissing = false;
+function updateCreateBtn() {
+  if (!createBtn || !cwdInput) return;
+  const empty = !cwdInput.value.trim();
+  createBtn.disabled = empty || (!cwdCheckEndpointMissing && !cwdValid);
+}
 async function validateCwd(path) {
-  if (cwdCheckEndpointMissing) return; // endpoint isn't there — stay silent.
+  if (cwdCheckEndpointMissing) { updateCreateBtn(); return; }
   const seq = ++cwdCheckSeq;
-  if (!path) { cwdHint.textContent = ""; cwdHint.className = "cwd-hint"; return; }
+  if (!path) { cwdHint.textContent = ""; cwdHint.className = "cwd-hint"; cwdValid = false; updateCreateBtn(); return; }
   try {
     const res = await fetch("/api/cwd/check?path=" + encodeURIComponent(path));
     if (seq !== cwdCheckSeq) return; // a newer keystroke has since fired.
@@ -99,11 +108,13 @@ async function validateCwd(path) {
       if (body && typeof body.ok === "boolean") {
         cwdHint.textContent = "✕ " + (body.error || "not a directory");
         cwdHint.className = "cwd-hint err";
+        cwdValid = false;
       } else {
         cwdCheckEndpointMissing = true;
         cwdHint.textContent = "";
         cwdHint.className = "cwd-hint";
       }
+      updateCreateBtn();
       return;
     }
     let body = null;
@@ -111,16 +122,21 @@ async function validateCwd(path) {
     if (res.ok && body && body.ok) {
       cwdHint.textContent = "✓ OK";
       cwdHint.className = "cwd-hint ok";
+      cwdValid = true;
     } else {
       const msg = (body && body.error) || res.statusText || "invalid path";
       cwdHint.textContent = "✕ " + msg;
       cwdHint.className = "cwd-hint err";
+      cwdValid = false;
     }
+    updateCreateBtn();
   } catch (_) {
     // Network/parse error — silently hide (don't block form submission).
     if (seq !== cwdCheckSeq) return;
     cwdHint.textContent = "";
     cwdHint.className = "cwd-hint";
+    cwdValid = false;
+    updateCreateBtn();
   }
 }
 
@@ -131,9 +147,14 @@ async function validateCwd(path) {
 function boot() {
   cwdInput = document.getElementById("cwd-input");
   cwdHint = document.getElementById("cwd-hint");
+  createBtn = document.getElementById("create-btn");
   cwdInput.addEventListener("input", () => {
     if (cwdCheckTimer) clearTimeout(cwdCheckTimer);
     const path = cwdInput.value.trim();
+    // Disable immediately on empty; the debounced validate will re-enable
+    // once a non-empty path checks out. Preserves the previous validity
+    // for non-empty typing so the button doesn't flicker per keystroke.
+    if (!path) { cwdValid = false; updateCreateBtn(); }
     cwdCheckTimer = setTimeout(() => validateCwd(path), 300);
   });
 
@@ -144,6 +165,8 @@ function boot() {
     if (capIn) capIn.value = "";
     cwdHint.textContent = "";
     cwdHint.className = "cwd-hint";
+    cwdValid = false;
+    updateCreateBtn();
     document.getElementById("modal").classList.add("show");
     cwdInput.focus();
   };
