@@ -292,6 +292,10 @@ button.confirming:hover:not(:disabled) { background: #ff6b64; border-color: #ff6
      RIGHT = charts + tokens + bars + feed + tools (scrolls independently) */
 .dash-main { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; flex: 1 1 0; min-height: 0; padding-bottom: 16px; }
 @media (max-width: 1100px) { .dash-main { grid-template-columns: 1fr; } }
+/* #45 F5 — flip the ratio when the right panel is showing Issues or PRs so
+   long titles and code blocks get real reading width. The tab switcher in
+   index.html toggles .reading whenever the active tab is not "team". */
+.dash-main.reading { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
 /* No agent selected → hide the terminal column; metrics span full width. */
 .dash-main.no-agent { grid-template-columns: 1fr; }
 .dash-main.no-agent .dash-left { display: none; }

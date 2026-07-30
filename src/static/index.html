@@ -111,11 +111,14 @@
                 </div>
               </div>
             </div>
-            <div class="rtab-pane" data-rpane="issues" style="display:none">
+            <!-- #45 F6 — tabindex="0" so the pane is keyboard-focusable;
+                 the tab switcher calls focus() when activating so PageDown
+                 and arrow-keys scroll the pane without a click first. -->
+            <div class="rtab-pane" data-rpane="issues" tabindex="0" style="display:none">
               <div id="gh-issues-view"></div>
               <div id="gh-issue-detail" style="display:none"></div>
             </div>
-            <div class="rtab-pane" data-rpane="prs" style="display:none">
+            <div class="rtab-pane" data-rpane="prs" tabindex="0" style="display:none">
               <div id="gh-prs-view"></div>
               <div id="gh-pr-detail" style="display:none"></div>
             </div>
@@ -340,27 +343,79 @@
   // #44 right-panel tab switcher. Team is default; Issues/PRs mount on first
   // activation via the module's exported window.collectifGhIssues.activate()
   // / window.collectifGhPrs.activate() so their sync fetch is lazy.
+  //
+  // #45 F5 / F6 additions:
+  //   • toggle .reading on .dash-main when the active tab is issues/prs so
+  //     the grid rebalances the right column wider (see style.css).
+  //   • focus() the newly-visible pane after activation so keyboard scroll
+  //     (PageDown, arrows) targets it immediately without a click first.
+  //   • persist the last-active tab per selected agent in sessionStorage so
+  //     switching agents remembers per-agent state, and restore on
+  //     agent-selected so the .reading class + focus follow along.
   (function () {
     const panel = document.getElementById("dash-team-panel");
     if (!panel) return;
     const initialized = { team: true, issues: false, prs: false };
-    panel.addEventListener("click", (e) => {
-      const btn = e.target.closest(".rtab");
-      if (!btn) return;
-      const which = btn.dataset.rtab;
+    const perAgent = new Map(); // agentId → "team" | "issues" | "prs"
+    const dashMain = document.querySelector(".dash-main");
+    const storageKey = (id) => "collectif.rtab." + id;
+
+    function activateTab(which, opts) {
+      opts = opts || {};
       for (const b of panel.querySelectorAll(".rtab")) {
-        const on = b === btn;
+        const on = b.dataset.rtab === which;
         b.classList.toggle("active", on);
+        // F4 — keep the ARIA state in sync with the visual selection so
+        // screen readers announce the active tab.
         b.setAttribute("aria-selected", on ? "true" : "false");
       }
+      let target = null;
       for (const p of panel.querySelectorAll(".rtab-pane")) {
-        p.style.display = p.dataset.rpane === which ? "" : "none";
+        const show = p.dataset.rpane === which;
+        p.style.display = show ? "" : "none";
+        if (show) target = p;
       }
+      // F5 — right column widens whenever we're reading Issues/PRs.
+      if (dashMain) dashMain.classList.toggle("reading", which !== "team");
+      // Lazy-init the GH modules on first activation of their tab.
       if (!initialized[which]) {
         initialized[which] = true;
         if (which === "issues" && window.collectifGhIssues) window.collectifGhIssues.activate();
         else if (which === "prs" && window.collectifGhPrs) window.collectifGhPrs.activate();
       }
+      // F6 — focus the pane so PageDown/arrows scroll it. Team pane is not
+      // itself the scroll container (its .team-canvas child is), and calling
+      // focus() on it steals focus from the composer's inputs, so skip.
+      if (opts.focus && target && which !== "team") {
+        // preventScroll avoids the browser jumping to the pane's saved scroll
+        // position if the caller just toggled visibility.
+        try { target.focus({ preventScroll: true }); } catch (_) { target.focus(); }
+      }
+      // Persist per-agent choice so switching agents remembers state.
+      if (typeof selectedId !== "undefined" && selectedId) {
+        perAgent.set(selectedId, which);
+        try { sessionStorage.setItem(storageKey(selectedId), which); } catch (_) {}
+      }
+    }
+
+    panel.addEventListener("click", (e) => {
+      const btn = e.target.closest(".rtab");
+      if (!btn) return;
+      activateTab(btn.dataset.rtab, { focus: true });
+    });
+
+    // When the user picks a different agent, restore that agent's last tab.
+    // dashboard.js fires this custom event from selectAgent().
+    document.addEventListener("collectif-agent-selected", (ev) => {
+      const id = ev.detail && ev.detail.id;
+      if (!id) return;
+      let which = perAgent.get(id);
+      if (!which) {
+        try { which = sessionStorage.getItem(storageKey(id)) || "team"; } catch (_) { which = "team"; }
+      }
+      if (which !== "team" && which !== "issues" && which !== "prs") which = "team";
+      // Don't steal focus on selection — the user clicked in the sidebar.
+      activateTab(which, { focus: false });
     });
   })();
 </script>

@@ -171,7 +171,11 @@
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
   padding: 12px; overflow-x: auto; margin: 0 0 12px;
 }
-.gh-md pre code { background: transparent; padding: 0; font-size: 12px; }
+/* #45 F5 — force `white-space: pre` on code inside <pre> so long lines
+   scroll horizontally (via the parent's overflow-x: auto) instead of
+   wrapping mid-token, which was making command snippets in issue bodies
+   unreadable when the right column was narrow. */
+.gh-md pre code { background: transparent; padding: 0; font-size: 12px; white-space: pre; }
 .gh-md ul, .gh-md ol { margin: 0 0 12px; padding-left: 24px; }
 .gh-md li { margin-bottom: 4px; }
 .gh-md li.task { list-style: none; margin-left: -20px; }
