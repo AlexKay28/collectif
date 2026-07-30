@@ -219,6 +219,7 @@ __marimo__/
 
 # Go build artifacts
 /collectif
+/src/src
 *.exe
 *.test
 *.out
