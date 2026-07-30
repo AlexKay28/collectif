@@ -246,6 +246,51 @@ button.confirming:hover:not(:disabled) { background: #ff6b64; border-color: #ff6
 .tok .sub { color: var(--muted); font-size: 9.5px; margin-top: 1px; }
 .tok.cost .val { color: var(--accent); }
 
+/* #38 Output-token split — stacked horizontal bar inside the Output tile
+ * plus a small legend row underneath. Colours are pinned rather than
+ * bound to theme tokens so the four segment classes stay visually
+ * distinct across dark/light modes; if you rethemed collectif's palette,
+ * update these three swatches. The .approx pill in the legend is a
+ * quiet hover-only tooltip target. */
+/* Split tile — same width as the other .tok tiles; the bar just scales
+ * to fill the cell. When there's room on wide screens it gains an extra
+ * column so the legend has breathing room. */
+.tok.split { min-width: 160px; }
+.tok-split-bar {
+  display: flex; height: 8px; width: 100%; margin-top: 6px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 4px; overflow: hidden;
+}
+.tok-split-bar .seg { display: block; height: 100%; transition: width 0.3s ease-out; }
+.tok-split-bar .seg.think { background: #b083f0; }  /* purple — thinking */
+.tok-split-bar .seg.text  { background: #79c0ff; }  /* blue — text */
+.tok-split-bar .seg.tool  { background: #f0a670; }  /* orange — tool_use */
+.tok-split-legend {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px;
+  color: var(--muted); font-size: 9.5px; font-variant-numeric: tabular-nums;
+}
+.tok-split-legend i.sw {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+  margin-right: 3px; vertical-align: -1px;
+}
+.tok-split-legend i.sw.think { background: #b083f0; }
+.tok-split-legend i.sw.text  { background: #79c0ff; }
+.tok-split-legend i.sw.tool  { background: #f0a670; }
+.tok-split-legend .approx {
+  margin-left: auto; padding: 0 4px; border: 1px dashed var(--border);
+  border-radius: 3px; cursor: help; letter-spacing: 0.03em;
+}
+
+/* #38 Row bar sub-segments in the "Tokens by agent" chart. Colours
+ * mirror the tile split so the two views read as the same taxonomy. */
+.bars .row .fill { display: flex; }
+.bars .row .fill .seg { display: block; height: 100%; }
+.bars .row .fill .seg.in    { background: linear-gradient(90deg, var(--accent), #79c0ff); }
+.bars .row .fill .seg.out   { background: linear-gradient(90deg, #4b8fd2, #79c0ff); }
+.bars .row .fill .seg.think { background: #b083f0; }
+.bars .row .fill .seg.text  { background: #79c0ff; }
+.bars .row .fill .seg.tool  { background: #f0a670; }
+
 .pending-panel { background: rgba(210, 153, 34, 0.10); border: 1px solid var(--waiting); border-radius: 10px; padding: 14px; margin-bottom: 6px; }
 .pending-item { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; }
 .pending-item + .pending-item { border-top: 1px solid rgba(210, 153, 34, 0.25); margin-top: 2px; }

@@ -117,6 +117,16 @@ type Session struct {
 	CacheCreationTokens int64
 	MessageCount        int
 
+	// #38 Per-block-type character counters for output. Anthropic's `usage`
+	// block reports a single `output_tokens` number, so we can't split by
+	// block type exactly. Instead we sum characters of each block type
+	// (thinking / text / tool_use.input JSON) across assistant turns and
+	// pro-rate the lump-sum output tokens across those char counts at
+	// serialise time. Guarded by s.mu alongside the token totals.
+	OutputThinkingChars uint64
+	OutputTextChars     uint64
+	OutputToolChars     uint64
+
 	// #42.1 harness context-pressure telemetry. LastContextTokens is the
 	// total context (uncached + cache-read + cache-create) of the MOST
 	// RECENT assistant turn — not cumulative. Model is the id used for
@@ -501,30 +511,56 @@ func (s *Session) toJSON() map[string]any {
 		}
 		pending = m
 	}
+	// #38 Pro-rate the lump-sum OutputTokens across the char counts we
+	// collected per block type. This is an approximation — the model uses
+	// a real tokenizer per turn and per block, and cheap-per-char JSON in
+	// tool_use blocks will be over-counted while dense thinking will be
+	// under-counted — but it's enough signal to answer "where is Opus
+	// spending its output budget on this session?". The remainder is
+	// assigned to tool tokens to avoid rounding drift so the three
+	// numbers always sum to OutputTokens exactly.
+	var thinkTok, textTok, toolTok int64
+	totalChars := s.OutputThinkingChars + s.OutputTextChars + s.OutputToolChars
+	if totalChars > 0 && s.OutputTokens > 0 {
+		outU := uint64(s.OutputTokens)
+		thinkTok = int64(outU * s.OutputThinkingChars / totalChars)
+		textTok = int64(outU * s.OutputTextChars / totalChars)
+		toolTok = s.OutputTokens - thinkTok - textTok
+	}
 	return map[string]any{
-		"id":                  s.ID,
-		"sessionId":           s.SessionID,
-		"cwd":                 s.Cwd,
-		"prompt":              s.Prompt,
-		"status":              s.Status,
-		"lastActivity":        s.LastActivity,
-		"lastTool":            s.LastTool,
-		"currentTask":         s.CurrentTask,
-		"taskHistory":         history,
-		"toolCounts":          toolCounts,
-		"activity":            activity,
-		"transcriptPath":      s.TranscriptPath,
-		"pending":             pending,
-		"menuOptions":         append([]MenuOption(nil), s.MenuOptions...),
-		"askQuestion":         s.AskQuestion,
-		"inputTokens":         s.InputTokens,
-		"outputTokens":        s.OutputTokens,
-		"cacheReadTokens":     s.CacheReadTokens,
-		"cacheCreationTokens": s.CacheCreationTokens,
-		"messageCount":        s.MessageCount,
-		"costCapUSD":          s.CostCapUSD, // #35
-		"createdAt":           s.CreatedAt.Format(time.RFC3339),
-		"updatedAt":           s.UpdatedAt.Format(time.RFC3339),
+		"id":                   s.ID,
+		"sessionId":            s.SessionID,
+		"cwd":                  s.Cwd,
+		"prompt":               s.Prompt,
+		"status":               s.Status,
+		"lastActivity":         s.LastActivity,
+		"lastTool":             s.LastTool,
+		"currentTask":          s.CurrentTask,
+		"taskHistory":          history,
+		"toolCounts":           toolCounts,
+		"activity":             activity,
+		"transcriptPath":       s.TranscriptPath,
+		"pending":              pending,
+		"menuOptions":          append([]MenuOption(nil), s.MenuOptions...),
+		"askQuestion":          s.AskQuestion,
+		"inputTokens":          s.InputTokens,
+		"outputTokens":         s.OutputTokens,
+		"cacheReadTokens":      s.CacheReadTokens,
+		"cacheCreationTokens":  s.CacheCreationTokens,
+		"messageCount":         s.MessageCount,
+		// #38 Approximate per-block-type split of OutputTokens. See the
+		// comment above and the tooltip in dashboard.js. The three
+		// *Tokens fields always sum to outputTokens; the *Chars fields
+		// are the raw counters used for the pro-rate.
+		"outputThinkingTokens": thinkTok,
+		"outputTextTokens":     textTok,
+		"outputToolTokens":     toolTok,
+		"outputThinkingChars":  s.OutputThinkingChars,
+		"outputTextChars":      s.OutputTextChars,
+		"outputToolChars":      s.OutputToolChars,
+		"costCapUSD":           s.CostCapUSD, // #35
+		"createdAt":            s.CreatedAt.Format(time.RFC3339),
+		"updatedAt":            s.UpdatedAt.Format(time.RFC3339),
 		// #37 PR-ready
 		"prURL":   s.PRURL,
 		"prTitle": s.PRTitle,
