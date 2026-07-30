@@ -260,7 +260,9 @@
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   padding: 10px 12px; margin: 8px 0; overflow-x: auto;
 }
-.ghp-md pre code { background: transparent; padding: 0; font-size: 12px; }
+/* #45 F5 — same rationale as .gh-md pre code: keep long lines on one line
+   inside the pre's scroll container instead of wrapping. */
+.ghp-md pre code { background: transparent; padding: 0; font-size: 12px; white-space: pre; }
 .ghp-md strong { font-weight: 700; }
 .ghp-md em { font-style: italic; }
 
