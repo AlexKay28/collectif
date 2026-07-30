@@ -92,6 +92,7 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 			}
 			br := bufio.NewReader(f)
 			var addedIn, addedOut, addedCR, addedCC int64
+			var addedThinkChars, addedTextChars, addedToolChars uint64
 			var addedMsgs int
 			var read int64
 			// #42.1 harness telemetry — set by the LAST usage-bearing line
@@ -109,11 +110,14 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 				}
 				partial = partial[:0]
 				if len(strings.TrimSpace(string(line))) > 0 {
-					if in, out, cr, cc, ok := extractUsage(line); ok {
+					if in, out, cr, cc, thinkCh, textCh, toolCh, ok := extractUsageAndChars(line); ok {
 						addedIn += in
 						addedOut += out
 						addedCR += cr
 						addedCC += cc
+						addedThinkChars += thinkCh
+						addedTextChars += textCh
+						addedToolChars += toolCh
 						addedMsgs++
 						// #42.1 track LAST turn's total context + model,
 						// separate from cumulative counters. A turn's
@@ -136,6 +140,9 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 				s.OutputTokens += addedOut
 				s.CacheReadTokens += addedCR
 				s.CacheCreationTokens += addedCC
+				s.OutputThinkingChars += addedThinkChars
+				s.OutputTextChars += addedTextChars
+				s.OutputToolChars += addedToolChars
 				s.MessageCount += addedMsgs
 				// #42.1 write through the last-turn snapshot. Only replace
 				// if we actually observed a new value this tick so a tick
@@ -162,18 +169,79 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 // extractUsage walks a decoded JSON line and returns tokens if a `usage`
 // object is present anywhere in a small set of well-known locations.
 func extractUsage(line []byte) (in, out, cr, cc int64, ok bool) {
+	in, out, cr, cc, _, _, _, ok = extractUsageAndChars(line)
+	return
+}
+
+// extractUsageAndChars is extractUsage extended with a per-block-type
+// character split of the assistant turn's `message.content[]`. #38.
+//
+// Correctness note: `usage` may live at three locations (top-level, under
+// `message`, or under `response`), but the typed `content` array only
+// lives under `message`. To avoid double-counting when a single JSONL
+// line contains both a top-level `usage` AND a nested `message.usage`,
+// we walk `message.content[]` at most once per line — keyed to whichever
+// usage location we picked — and never fall back to scanning other
+// branches for content.
+func extractUsageAndChars(line []byte) (in, out, cr, cc int64, thinkCh, textCh, toolCh uint64, ok bool) {
 	var v map[string]any
 	if err := json.Unmarshal(line, &v); err != nil {
-		return 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, 0, 0, false
 	}
-	if u := findUsage(v); u != nil {
-		return getI64(u, "input_tokens"),
-			getI64(u, "output_tokens"),
-			getI64(u, "cache_read_input_tokens"),
-			getI64(u, "cache_creation_input_tokens"),
-			true
+	u := findUsage(v)
+	if u == nil {
+		return 0, 0, 0, 0, 0, 0, 0, false
 	}
-	return 0, 0, 0, 0, false
+	in = getI64(u, "input_tokens")
+	out = getI64(u, "output_tokens")
+	cr = getI64(u, "cache_read_input_tokens")
+	cc = getI64(u, "cache_creation_input_tokens")
+	// Chars only come from message.content[]. If we don't see one, we
+	// still return the usage — chars just stay zero, matching the
+	// "old-transcript / no content array" case in the issue.
+	if m, mok := v["message"].(map[string]any); mok {
+		thinkCh, textCh, toolCh = sumContentChars(m["content"])
+	}
+	ok = true
+	return
+}
+
+// sumContentChars walks a message.content[] array and sums the character
+// length of each block by type. Unknown block types contribute zero.
+//   - "thinking": len(block.thinking)
+//   - "text":     len(block.text)
+//   - "tool_use": len(json(block.input))  — the input object is what the
+//     model actually generated; JSON-encoding it approximates the token
+//     surface. Falls back to zero if input is missing/unmarshalable.
+func sumContentChars(raw any) (think, text, tool uint64) {
+	arr, ok := raw.([]any)
+	if !ok {
+		return 0, 0, 0
+	}
+	for _, item := range arr {
+		block, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		bt, _ := block["type"].(string)
+		switch bt {
+		case "thinking":
+			if s, ok := block["thinking"].(string); ok {
+				think += uint64(len(s))
+			}
+		case "text":
+			if s, ok := block["text"].(string); ok {
+				text += uint64(len(s))
+			}
+		case "tool_use":
+			if input, ok := block["input"]; ok && input != nil {
+				if b, err := json.Marshal(input); err == nil {
+					tool += uint64(len(b))
+				}
+			}
+		}
+	}
+	return
 }
 
 // extractModel pulls the model id from a transcript line. Anthropic puts

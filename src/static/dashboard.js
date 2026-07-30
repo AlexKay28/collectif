@@ -32,6 +32,10 @@ function computeSummary() {
   const now = Date.now();
   let active = 0, waiting = 0, idle = 0, err = 0, stopped = 0, recentlyActive = 0;
   let totalIn = 0, totalOut = 0, totalCR = 0, totalCC = 0, totalMsgs = 0;
+  // #38 Fleet-wide output split. Server already pro-rates per-agent; we
+  // just sum the resulting per-block-type token counts so the Overview
+  // tile can render a stacked bar without re-doing the math client-side.
+  let totalOutThink = 0, totalOutText = 0, totalOutTool = 0;
   const pending = [];
   const toolAgg = {};
   for (const a of arr) {
@@ -47,12 +51,16 @@ function computeSummary() {
     totalCR += a.cacheReadTokens || 0;
     totalCC += a.cacheCreationTokens || 0;
     totalMsgs += a.messageCount || 0;
+    totalOutThink += a.outputThinkingTokens || 0;
+    totalOutText  += a.outputTextTokens || 0;
+    totalOutTool  += a.outputToolTokens || 0;
     if (a.pending) pending.push(a);
     for (const [t, c] of Object.entries(a.toolCounts || {})) toolAgg[t] = (toolAgg[t] || 0) + c;
   }
   const totalCost = arr.reduce((s, a) => s + estimateCost(a), 0);
   return { arr, active, waiting, idle, err, stopped, recentlyActive,
-           totalIn, totalOut, totalCR, totalCC, totalMsgs, totalCost, pending, toolAgg };
+           totalIn, totalOut, totalCR, totalCC, totalMsgs, totalCost, pending, toolAgg,
+           totalOutThink, totalOutText, totalOutTool };
 }
 
 // Subtitle + hero-strip live in the "pending" section conceptually (they
@@ -76,9 +84,14 @@ function renderPending() {
 
 function renderTokens() {
   const s = computeSummary();
+  // #38 The Output tile now carries a stacked bar split into thinking /
+  // text / tool_use. Fall back to the flat number when we have no char
+  // signal yet (session pre-dates the upgrade, or hasn't produced any
+  // typed content). Keep the lump-sum big number above the bar so the
+  // familiar "N generated tokens" is still visible at a glance.
   document.getElementById("dash-tokens").innerHTML = (
     tileTok("Input", s.totalIn, "prompt tokens") +
-    tileTok("Output", s.totalOut, "generated tokens") +
+    tileTokSplit("Output", s.totalOut, s.totalOutThink, s.totalOutText, s.totalOutTool) +
     tileTok("Cache read", s.totalCR, "cache hits") +
     tileTok("Cache write", s.totalCC, "cache created") +
     tileTokCost("Estimated cost", fmtCost(s.totalCost), "Sonnet 4.6 rates (approx)")
@@ -90,16 +103,30 @@ function renderTokensByAgent() {
   // Ceiling steps up through a 1‑2.5‑5 sequence (1000, 2500, 5000, 10000, ...).
   const peakTok = Math.max(0, ...arr.map(a => (a.inputTokens || 0) + (a.outputTokens || 0)));
   const maxTok = barScaleCeil(peakTok);
+  // #38 The per-agent bar keeps its length (proportional to total in+out
+  // tokens) but the OUTPUT slice within it is now sub-segmented into
+  // thinking / text / tool_use using the pro-rated counts from the API.
+  // Input tokens keep their existing "input" colour so the bar is still
+  // dominated by whichever number is dominant in absolute terms.
   document.getElementById("dash-bars").innerHTML = arr.length === 0
     ? '<div style="color: var(--muted); font-size: 12px">no agents</div>'
     : arr.slice().sort((a, b) => ((b.inputTokens || 0) + (b.outputTokens || 0)) - ((a.inputTokens || 0) + (a.outputTokens || 0)))
         .map(a => {
-          const tok = (a.inputTokens || 0) + (a.outputTokens || 0);
+          const inp = a.inputTokens || 0;
+          const out = a.outputTokens || 0;
+          const tok = inp + out;
           const pct = tok <= 0 ? 0 : Math.max(1, Math.round((tok / maxTok) * 100));
+          // Sub-segment widths inside the row's filled portion. When
+          // outputThinking/text/tool are all zero (no signal yet), we
+          // fall back to a single output segment.
+          const think = a.outputThinkingTokens || 0;
+          const text  = a.outputTextTokens || 0;
+          const tool  = a.outputToolTokens || 0;
+          const segs = renderRowOutputSegments(tok, inp, out, think, text, tool);
           return (
             '<button type="button" class="row" aria-label="Open agent ' + esc(agentName(a)) + ' — ' + fmtNum(tok) + ' tokens" data-id="' + esc(a.id) + '">' +
               '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
-              '<div class="track"><div class="fill" style="width:' + pct + '%"></div><span class="lbl">' + esc(agentName(a)) + '</span></div>' +
+              '<div class="track"><div class="fill" style="width:' + pct + '%">' + segs + '</div><span class="lbl">' + esc(agentName(a)) + '</span></div>' +
               '<div class="num">' + fmtNum(tok) + '</div>' +
             '</button>'
           );
@@ -112,6 +139,32 @@ function renderTokensByAgent() {
       selectAgent(r.dataset.id);
     });
   });
+}
+
+// #38 Render the four coloured sub-segments (input, thinking, text, tool)
+// that fill an agent's row bar. Percentages are normalised against the
+// row's own token total so they always fill exactly 100% of the .fill
+// container. Zero-width segments are omitted so the CSS border-radius
+// on the outer element renders cleanly for the visible segments.
+function renderRowOutputSegments(tok, inp, out, think, text, tool) {
+  if (tok <= 0) return "";
+  const parts = [];
+  const pushSeg = (kind, val, title) => {
+    if (val <= 0) return;
+    const p = (val / tok) * 100;
+    parts.push('<span class="seg ' + kind + '" style="width:' + p.toFixed(2) + '%" title="' + esc(title) + '"></span>');
+  };
+  pushSeg("in", inp, fmtNum(inp) + " input tokens");
+  // If server gave us a per-block-type split, use it; otherwise render a
+  // single "output" segment so pre-#38 sessions still look right.
+  if (think + text + tool > 0) {
+    pushSeg("think", think, fmtNum(think) + " thinking tokens (approx)");
+    pushSeg("text",  text,  fmtNum(text) + " text tokens (approx)");
+    pushSeg("tool",  tool,  fmtNum(tool) + " tool_use tokens (approx)");
+  } else {
+    pushSeg("out", out, fmtNum(out) + " output tokens");
+  }
+  return parts.join("");
 }
 
 function renderFeed() {
@@ -514,6 +567,43 @@ function tileTok(lab, val, sub) {
 }
 function tileTokCost(lab, val, sub) {
   return '<div class="tok cost"><div class="lab">' + esc(lab) + '</div><div class="val">' + esc(val) + '</div><div class="sub">' + esc(sub) + '</div></div>';
+}
+
+// #38 Output-tokens tile with a stacked horizontal bar splitting the
+// lump-sum output_tokens into thinking / text / tool_use segments,
+// plus a legend and an "approximate" tooltip. The big number stays at
+// the top of the tile for continuity with the other tiles. If we have
+// no char signal yet (no assistant turn observed since the upgrade),
+// we render the plain flat number — no misleading zeros in the legend.
+const TOK_APPROX_TITLE = "Approximate — pro-rated from the character split of Claude's response blocks. " +
+  "Thinking is typically under-counted (dense reasoning packs more tokens per char) " +
+  "and tool_use is typically over-counted (JSON keys are token-cheap).";
+function tileTokSplit(lab, total, think, text, tool) {
+  const sum = think + text + tool;
+  if (total <= 0 || sum <= 0) {
+    return tileTok(lab, total, "generated tokens");
+  }
+  const p = (n) => ((n / sum) * 100).toFixed(1) + "%";
+  const bar =
+    '<div class="tok-split-bar" title="' + esc(TOK_APPROX_TITLE) + '">' +
+      '<span class="seg think" style="width:' + p(think) + '" title="Thinking · ' + fmtNum(think) + ' tokens (approx)"></span>' +
+      '<span class="seg text"  style="width:' + p(text)  + '" title="Text · '     + fmtNum(text)  + ' tokens (approx)"></span>' +
+      '<span class="seg tool"  style="width:' + p(tool)  + '" title="Tool use · ' + fmtNum(tool)  + ' tokens (approx)"></span>' +
+    '</div>';
+  const legend =
+    '<div class="tok-split-legend">' +
+      '<span><i class="sw think"></i>' + fmtNum(think) + ' thinking</span>' +
+      '<span><i class="sw text"></i>'  + fmtNum(text)  + ' text</span>' +
+      '<span><i class="sw tool"></i>'  + fmtNum(tool)  + ' tool</span>' +
+      '<span class="approx" title="' + esc(TOK_APPROX_TITLE) + '">approx</span>' +
+    '</div>';
+  return (
+    '<div class="tok split">' +
+      '<div class="lab">' + esc(lab) + '</div>' +
+      '<div class="val">' + fmtNum(total) + '</div>' +
+      bar + legend +
+    '</div>'
+  );
 }
 
 // ─── Sidebar (with user-defined order + drag) ───
