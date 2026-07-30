@@ -124,10 +124,10 @@ function renderTeamCanvas() {
     const indent = depth * 14 + 8;
     const hasDesc = !!(sf.description || "").trim();
     const chevron = hasDesc
-      ? '<button class="tree-chevron" data-act="expand" title="Show description">▸</button>'
-      : '<span class="tree-chevron" style="visibility:hidden">▸</span>';
+      ? '<button class="tree-chevron" type="button" data-act="expand" aria-label="Show description for ' + esc(sf.name) + '" title="Show description">▸</button>'
+      : '<span class="tree-chevron" style="visibility:hidden" aria-hidden="true">▸</span>';
     return (
-      '<div class="tree-row' + (isLast ? " last" : "") + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="padding-left:' + indent + 'px;--d:' + depth + '">' +
+      '<div class="tree-row' + (isLast ? " last" : "") + '" role="button" tabindex="0" aria-label="Edit subagent ' + esc(sf.name) + '" data-name="' + esc(sf.name) + '" data-scope="' + esc(sf.scope || "project") + '" style="padding-left:' + indent + 'px;--d:' + depth + '">' +
         chevron +
         '<div class="tree-info"><span class="name">' + esc(sf.name) + '</span></div>' +
         '<div class="tree-badges">' + modelBadge + scopeBadge + '</div>' +
@@ -146,6 +146,12 @@ function renderTeamCanvas() {
       }
       openSubagentModal(r.dataset.name, r.dataset.scope);
     };
+    r.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (ev.target.closest("[data-act='expand']")) return;
+      ev.preventDefault();
+      openSubagentModal(r.dataset.name, r.dataset.scope);
+    });
   });
 }
 

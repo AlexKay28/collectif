@@ -109,7 +109,7 @@ function renderAttachmentStrip() {
       '<img class="thumb" src="' + esc(c.thumb) + '" alt="">' +
       '<span class="name">' + esc(shortName(c.name)) + '</span>' +
       '<span class="dot ' + c.status + '" aria-hidden="true"></span>' +
-      '<button class="rm" title="Remove">×</button>';
+      '<button class="rm" type="button" aria-label="Remove attachment ' + esc(c.name) + '" title="Remove">×</button>';
     el.querySelector(".rm").addEventListener("click", (ev) => {
       ev.stopPropagation();
       removeChip(selectedId, c.path);

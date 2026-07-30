@@ -26,8 +26,8 @@
 
   <div id="main">
     <aside id="sidebar">
-      <button class="add-agent-suggest" id="new-btn" aria-label="Add Agent" data-testid="add-agent" title="Spawn a new Claude Code session">
-        <span class="plus">+</span> Add Agent
+      <button class="add-agent-suggest" id="new-btn" type="button" aria-label="Add Agent" data-testid="add-agent" title="Spawn a new Claude Code session">
+        <span class="plus" aria-hidden="true">+</span> Add Agent
       </button>
       <div id="sidebar-list"></div>
     </aside>
@@ -43,7 +43,7 @@
           <div class="dash-left">
             <div class="term-panel">
               <div class="empty" id="term-empty">
-                <div style="font-size:28px">🤖</div>
+                <div style="font-size:28px" aria-hidden="true">🤖</div>
                 <div>Select an agent on the left to open its terminal here.</div>
               </div>
               <div id="term-head" class="term-head" style="display:none">
@@ -57,10 +57,10 @@
                   <div class="task" id="d-task"></div>
                 </div>
                 <div class="actions">
-                  <button id="d-copy" title="Open copy dialog (Ctrl+Shift+C)">Copy…</button>
+                  <button id="d-copy" type="button" aria-label="Open terminal output copy dialog" title="Open copy dialog (Ctrl+Shift+C)">Copy…</button>
                   <!-- #35 shown only when status === paused_over_budget -->
-                  <button id="d-resume" style="display:none" title="Resume the paused agent (clears its cost cap)">Resume anyway</button>
-                  <button id="d-kill" class="ghost">Kill</button>
+                  <button id="d-resume" type="button" style="display:none" aria-label="Resume paused agent" title="Resume the paused agent (clears its cost cap)">Resume anyway</button>
+                  <button id="d-kill" type="button" class="ghost" aria-label="Kill selected agent">Kill</button>
                 </div>
               </div>
               <div class="term-body" id="term-body" style="display:none">
@@ -74,18 +74,18 @@
                the subagent designer + attachment composer; Issues and PRs
                mount the #44 GitHub-mirror views. -->
           <div class="dash-team" id="dash-team-panel" style="display:none">
-            <div class="right-tabs">
-              <button class="rtab active" data-rtab="team">Team</button>
-              <button class="rtab" data-rtab="issues">Issues</button>
-              <button class="rtab" data-rtab="prs">PRs</button>
+            <div class="right-tabs" role="tablist" aria-label="Session side-panel tabs">
+              <button class="rtab active" type="button" role="tab" aria-selected="true" data-rtab="team">Team</button>
+              <button class="rtab" type="button" role="tab" aria-selected="false" data-rtab="issues">Issues</button>
+              <button class="rtab" type="button" role="tab" aria-selected="false" data-rtab="prs">PRs</button>
             </div>
             <div class="rtab-pane" data-rpane="team">
               <div class="team-inline-head">
                 <h3 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Team</h3>
                 <span class="team-cwd" id="team-cwd"></span>
                 <span class="spacer"></span>
-                <button id="team-refresh" title="Re-read .claude/agents from disk">↻</button>
-                <button class="primary" id="team-new">+ Subagent</button>
+                <button id="team-refresh" type="button" aria-label="Refresh subagents from disk" title="Re-read .claude/agents from disk">↻</button>
+                <button class="primary" id="team-new" type="button" aria-label="Create a new subagent">+ Subagent</button>
               </div>
               <div class="team-canvas" id="team-canvas"></div>
               <div class="team-empty" id="team-empty" style="display:none">
@@ -103,10 +103,10 @@
                 <div id="compose-strip" class="compose-strip">
                   <div class="chips"></div>
                   <div class="row">
-                    <button id="compose-pick" class="ghost" title="Attach image (paste, drop, or click)">📎</button>
-                    <button id="compose-draw" class="ghost" title="Open drawing pad">✏️</button>
+                    <button id="compose-pick" class="ghost" type="button" aria-label="Attach image (paste, drop, or click)" title="Attach image (paste, drop, or click)">📎</button>
+                    <button id="compose-draw" class="ghost" type="button" aria-label="Open drawing pad" title="Open drawing pad">✏️</button>
                     <input id="compose-file" type="file" accept="image/*" multiple style="display:none">
-                    <button id="compose-send" class="primary">Send</button>
+                    <button id="compose-send" class="primary" type="button" aria-label="Send attachments to selected agent">Send</button>
                   </div>
                 </div>
               </div>
@@ -187,8 +187,8 @@
       <input id="cap-input" type="number" step="0.01" placeholder="e.g. 5.00" />
     </label>
     <div class="actions">
-      <button id="cancel-btn">Cancel</button>
-      <button class="primary" id="create-btn">Spawn</button>
+      <button id="cancel-btn" type="button" aria-label="Cancel spawn dialog">Cancel</button>
+      <button class="primary" id="create-btn" type="button" aria-label="Spawn agent">Spawn</button>
     </div>
   </div>
 </div>
@@ -226,9 +226,9 @@
       <textarea id="sa-prompt" rows="8" placeholder="You are a…"></textarea>
     </label>
     <div class="actions">
-      <button class="ghost" id="sa-delete" style="margin-right:auto">Delete</button>
-      <button id="sa-cancel">Cancel</button>
-      <button class="primary" id="sa-save">Save</button>
+      <button class="ghost" id="sa-delete" type="button" aria-label="Delete subagent" style="margin-right:auto">Delete</button>
+      <button id="sa-cancel" type="button" aria-label="Cancel subagent edit">Cancel</button>
+      <button class="primary" id="sa-save" type="button" aria-label="Save subagent">Save</button>
     </div>
   </div>
 </div>
@@ -240,22 +240,22 @@
       <h3>Drawing pad</h3>
       <span class="spacer"></span>
       <span class="hint">Sketch a UI, arrow, or note — then Save & attach</span>
-      <button id="draw-cancel">Cancel</button>
-      <button class="primary" id="draw-save">Save &amp; attach</button>
+      <button id="draw-cancel" type="button" aria-label="Cancel drawing">Cancel</button>
+      <button class="primary" id="draw-save" type="button" aria-label="Save drawing and attach">Save &amp; attach</button>
     </div>
     <div class="draw-toolbar">
-      <span class="draw-swatches">
-        <button class="draw-color" data-color="#e6edf3" title="White" style="background:#e6edf3"></button>
-        <button class="draw-color" data-color="#f85149" title="Red"   style="background:#f85149"></button>
-        <button class="draw-color" data-color="#3fb950" title="Green" style="background:#3fb950"></button>
-        <button class="draw-color" data-color="#58a6ff" title="Blue"  style="background:#58a6ff"></button>
-        <button class="draw-color" data-color="#f0b429" title="Amber" style="background:#f0b429"></button>
+      <span class="draw-swatches" role="group" aria-label="Brush colour">
+        <button class="draw-color" type="button" data-color="#e6edf3" aria-label="Colour: white" title="White" style="background:#e6edf3"></button>
+        <button class="draw-color" type="button" data-color="#f85149" aria-label="Colour: red"   title="Red"   style="background:#f85149"></button>
+        <button class="draw-color" type="button" data-color="#3fb950" aria-label="Colour: green" title="Green" style="background:#3fb950"></button>
+        <button class="draw-color" type="button" data-color="#58a6ff" aria-label="Colour: blue"  title="Blue"  style="background:#58a6ff"></button>
+        <button class="draw-color" type="button" data-color="#f0b429" aria-label="Colour: amber" title="Amber" style="background:#f0b429"></button>
       </span>
-      <button id="draw-eraser" title="Eraser">Eraser</button>
-      <label class="draw-size-lab">Size <input id="draw-size" type="range" min="1" max="20" value="4"><span id="draw-size-val">4px</span></label>
+      <button id="draw-eraser" type="button" aria-label="Toggle eraser" title="Eraser">Eraser</button>
+      <label class="draw-size-lab">Size <input id="draw-size" type="range" min="1" max="20" value="4" aria-label="Brush size in pixels"><span id="draw-size-val">4px</span></label>
       <span class="spacer"></span>
-      <button id="draw-undo" title="Undo last stroke">Undo</button>
-      <button id="draw-clear" title="Clear all">Clear</button>
+      <button id="draw-undo" type="button" aria-label="Undo last stroke" title="Undo last stroke">Undo</button>
+      <button id="draw-clear" type="button" aria-label="Clear canvas" title="Clear all">Clear</button>
     </div>
     <canvas id="draw-canvas"></canvas>
   </div>
@@ -267,8 +267,8 @@
       <h3>Terminal output</h3>
       <span class="spacer"></span>
       <span class="hint">Text is pre-selected — press <b>Ctrl+C</b> to copy, or refine your selection first</span>
-      <button id="output-copy-all">Copy all</button>
-      <button id="output-close">Close</button>
+      <button id="output-copy-all" type="button" aria-label="Copy full terminal output">Copy all</button>
+      <button id="output-close" type="button" aria-label="Close output dialog">Close</button>
     </div>
     <pre id="output-body">…</pre>
   </div>
@@ -348,7 +348,11 @@
       const btn = e.target.closest(".rtab");
       if (!btn) return;
       const which = btn.dataset.rtab;
-      for (const b of panel.querySelectorAll(".rtab")) b.classList.toggle("active", b === btn);
+      for (const b of panel.querySelectorAll(".rtab")) {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      }
       for (const p of panel.querySelectorAll(".rtab-pane")) {
         p.style.display = p.dataset.rpane === which ? "" : "none";
       }
