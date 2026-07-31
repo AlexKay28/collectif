@@ -51,6 +51,10 @@ func (srv *Server) Router() http.Handler {
 	mux.HandleFunc("/api/agents/", handleAgentByID)
 	mux.HandleFunc("/api/cwd/check", handleCwdCheck)
 	mux.HandleFunc("/api/config", handleConfig)
+	// #46 Phase 3: expose the CLIAdapter registry so the frontend can
+	// populate the spawn picker + decide which per-session panels to
+	// degrade for adapters that don't support them.
+	mux.HandleFunc("/api/cli", handleCLIList)
 	mux.HandleFunc("/api/hooks", handleHook)
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)

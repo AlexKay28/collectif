@@ -23,17 +23,74 @@ function updateTeamVisibility() {
   if (a) {
     team.style.display = "flex";
     metrics.style.display = "none";
-    if (teamCurrentSelection !== a.id) {
+    // #46 Phase 3: adapters that don't support subagentFiles get a
+    // graceful-degradation notice in place of the Team designer. The
+    // adapter check runs on every visibility update so a WS upsert
+    // that changes a.cli mid-session (unlikely, but cheap) flips the
+    // pane correctly. Team polling stays off for these adapters —
+    // there's no .claude/agents/ file to watch.
+    applyTeamDegradation(a);
+    if (adapterSupports(a, "subagentFiles")) {
+      if (teamCurrentSelection !== a.id) {
+        teamCurrentSelection = a.id;
+        refreshTeamForCurrent();
+      }
+      startTeamPolling();
+    } else {
       teamCurrentSelection = a.id;
-      refreshTeamForCurrent();
+      teamSubagents = [];
+      stopTeamPolling();
     }
-    startTeamPolling();
   } else {
     team.style.display = "none";
     metrics.style.display = "";
     teamCurrentSelection = null;
     teamSubagents = [];
     stopTeamPolling();
+  }
+}
+
+// #46 Phase 3: swap the Team pane's designer surface for a "not available
+// for {codex|opencode} sessions" empty-state when the current adapter
+// doesn't ship a subagent file convention. The Attach & Send composer
+// stays visible in both branches — it's PTY-input plumbing, not
+// adapter-specific — so this only toggles the top-of-pane bits.
+function applyTeamDegradation(agent) {
+  const teamHead   = document.querySelector("#dash-team-panel .team-inline-head");
+  const teamCanvas = document.getElementById("team-canvas");
+  const teamEmpty  = document.getElementById("team-empty");
+  let unsupported  = document.getElementById("team-unsupported");
+  const supports = adapterSupports(agent, "subagentFiles");
+  // Lazy-create the unsupported panel once, so we can toggle it in and
+  // out cheaply. Sits between the head bar and the composer, so it
+  // takes the vertical space the tree normally would.
+  if (!unsupported) {
+    unsupported = document.createElement("div");
+    unsupported.id = "team-unsupported";
+    unsupported.className = "team-unsupported";
+    // Insert before the compose-panel so the composer stays visible below.
+    const pane = document.querySelector('#dash-team-panel .rtab-pane[data-rpane="team"]');
+    const compose = document.getElementById("compose-panel");
+    if (pane && compose) pane.insertBefore(unsupported, compose);
+    else if (pane) pane.appendChild(unsupported);
+  }
+  if (supports) {
+    unsupported.style.display = "none";
+    if (teamHead)   teamHead.style.display = "";
+    // team-canvas + team-empty visibility is owned by renderTeamCanvas —
+    // don't stomp its choice here.
+  } else {
+    const name = agent.cli || "this";
+    unsupported.innerHTML =
+      '<div class="team-unsupported-inner">' +
+        '<div class="ico" aria-hidden="true">🧩</div>' +
+        '<div class="msg">Team designer is a Claude Code feature. ' +
+          'Not available for ' + esc(name) + ' sessions.</div>' +
+      '</div>';
+    unsupported.style.display = "flex";
+    if (teamHead)   teamHead.style.display = "none";
+    if (teamCanvas) teamCanvas.style.display = "none";
+    if (teamEmpty)  teamEmpty.style.display = "none";
   }
 }
 

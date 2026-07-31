@@ -661,18 +661,28 @@ function renderSidebar() {
     const quietTitle = quiet ? "Un-mute notifications for this agent" : "Mute notifications for this agent";
     // #42.1 context pressure bar under the token row. Green <60%,
     // amber 60-85%, red >85%. Only render when we have signal.
+    //
+    // #46 Phase 3: for adapters without StructuredTranscript we have no
+    // reliable token accounting, so the pressure bar would be
+    // misleadingly zero. Render "—" in that slot instead of a bar.
     const ctxPct = a.contextUsedPct || 0;
     let ctxCls = "ok";
     if (ctxPct >= 0.85) ctxCls = "hot";
     else if (ctxPct >= 0.6) ctxCls = "warm";
-    const ctxBar = ctxPct > 0
-      ? '<div class="ctx-bar ' + ctxCls + '" title="Context ' + Math.round(ctxPct*100) + '% (' + fmtNum(a.lastContextTokens||0) + ' / ' + fmtNum(a.contextLimit||0) + ' tokens)"><div class="fill" style="width:' + (ctxPct*100).toFixed(1) + '%"></div></div>'
-      : "";
+    const ctxBar = !adapterSupports(a, "structuredTranscript")
+      ? '<div class="ctx-bar dashed" title="Context pressure unavailable — this CLI does not expose a structured transcript.">—</div>'
+      : (ctxPct > 0
+          ? '<div class="ctx-bar ' + ctxCls + '" title="Context ' + Math.round(ctxPct*100) + '% (' + fmtNum(a.lastContextTokens||0) + ' / ' + fmtNum(a.contextLimit||0) + ' tokens)"><div class="fill" style="width:' + (ctxPct*100).toFixed(1) + '%"></div></div>'
+          : "");
     // #42.7 health warning pill — only shown when score drops below 70.
     const health = a.healthScore == null ? 100 : a.healthScore;
     const healthPill = health < 70
       ? '<span class="health-pill' + (health < 50 ? ' danger' : '') + '" title="' + esc(a.healthReason || "degraded") + '">⚠ ' + esc(a.healthReason || "degraded") + '</span>'
       : "";
+    // #46 CLI chip: 2-letter form + per-CLI colour class. Comes right
+    // after the codename so at-a-glance scanning of the sidebar reveals
+    // which sessions belong to which CLI.
+    const cliChip = renderCLIChip(a.cli);
     c.innerHTML = (
       '<button class="quiet-btn" type="button" draggable="false" aria-label="' + esc(quietTitle) + '" title="' + esc(quietTitle) + '">' + quietIcon + '</button>' +
       '<button class="kill-btn" type="button" draggable="false" aria-label="Kill agent ' + esc(agentName(a)) + '" title="Kill agent">×</button>' +
@@ -680,6 +690,7 @@ function renderSidebar() {
         '<div class="avatar"><img src="' + avatarURL(a.id) + '" alt=""></div>' +
         '<div class="card-body">' +
           '<div class="card-name"><span class="name">' + esc(agentName(a)) + '</span>' +
+          cliChip +
           (a.pending ? '<span class="pending-badge">Action</span>' : '') +
           (a.status === "review_ready" ? '<span class="review-badge">PR</span>' : '') +
           '<span class="age">' + humanAge(a.createdAt) + '</span></div>' +

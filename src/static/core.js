@@ -81,6 +81,46 @@ function topTools(counts, n) {
   return Object.entries(counts || {}).sort((a, b) => b[1] - a[1]).slice(0, n);
 }
 
+// ─── #46 CLI adapter helpers ────────────────────
+// Two-letter chip forms per CLI. Keeping the mapping in one place so a new
+// adapter (aider, cursor-cli, …) only needs one entry here plus a colour
+// class in style.css.
+const CLI_SHORT = { claude: "CL", codex: "CX", opencode: "OC" };
+
+// renderCLIChip returns the sidebar chip HTML for an agent.cli value. Empty
+// / unknown adapters render as a two-letter uppercase snippet so unknown-CLI
+// sessions still show *something* meaningful instead of an empty gap.
+function renderCLIChip(name) {
+  const n = (name || "claude").toLowerCase();
+  const short = CLI_SHORT[n] || (n.slice(0, 2).toUpperCase() || "??");
+  const cls = "cli-chip cli-" + esc(n);
+  const label = "CLI: " + n;
+  return '<span class="' + cls + '" title="' + esc(label) + '" aria-label="' + esc(label) + '">' + esc(short) + '</span>';
+}
+
+// adapterSupports checks whether the CLIAdapter behind an agent exposes a
+// given capability. Falls back to `true` when the adapter list hasn't
+// loaded yet (fail-open — worst case we render a panel that immediately
+// re-hides itself on the next render tick once the list arrives). Bare
+// bool cast so callers can chain into ternaries without truthy surprises.
+function adapterSupports(agent, capabilityKey) {
+  if (!agent) return true;
+  const name = agent.cli || "claude";
+  const info = window.collectifCLIByName && window.collectifCLIByName[name];
+  if (!info || !info.capabilities) return true;
+  return !!info.capabilities[capabilityKey];
+}
+
+// adapterVersion returns the cached version string for an agent's adapter,
+// or "" if unknown. Used by renderTermPanel for the "codex 0.5.0 · /path"
+// line in the terminal header.
+function adapterVersion(agent) {
+  if (!agent) return "";
+  const name = agent.cli || "claude";
+  const info = window.collectifCLIByName && window.collectifCLIByName[name];
+  return (info && info.version) || "";
+}
+
 // ─── Cost estimate (rough Sonnet 4.6 pricing) ───
 // Input $3/M · Output $15/M · Cache read $0.30/M · Cache write $3.75/M
 function estimateCost(a) {

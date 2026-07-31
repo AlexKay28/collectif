@@ -17,7 +17,15 @@ function renderTermPanel(mountTerminal) {
 
   document.getElementById("d-avatar").src = avatarURL(a.id);
   document.getElementById("d-name").textContent = agentName(a);
-  document.getElementById("d-cwd").textContent = a.cwd;
+  // #46 Terminal header meta line: `<cli> <version> · <cwd>` so users
+  // at-a-glance see which CLI is running the selected session (and
+  // which version, when known). Falls back to just cwd when the CLI
+  // is unknown to the client-side cache.
+  const cliName = a.cli || "claude";
+  const cliVer = adapterVersion(a);
+  const cliMeta = cliVer ? (cliName + " " + cliVer) : cliName;
+  document.getElementById("d-cwd").textContent = cliMeta + " · " + a.cwd;
+  document.getElementById("d-cwd").title = cliMeta + " — " + a.cwd;
   const status = a.status || "idle";
   document.getElementById("d-status").innerHTML = '<span class="status-pill ' + esc(status) + '"><span class="dot"></span>' + esc(status.replace(/_/g, " ")) + '</span>';
   const task = a.currentTask || a.prompt || "";
