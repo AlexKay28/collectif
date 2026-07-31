@@ -1,33 +1,40 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
-	"os"
-	"os/exec"
-	"syscall"
 
 	"github.com/creack/pty"
 )
 
-// spawnClaude launches `claude` in a PTY under s.Cwd, pinned to s.SessionID.
+// spawnSession launches the session's CLI in a PTY under s.Cwd. The choice
+// of CLI is driven by s.CLI (defaulting to "claude") via the CLIAdapter
+// registry — this file is CLI-agnostic in Phase 1 of #46. Adapters own the
+// exec.Cmd construction (binary, args, env, settings file) and return a
+// cleanup we invoke on session teardown.
+//
 // PTY output is teed into the ring buffer and broadcast to WS subscribers.
-func spawnClaude(s *Session, settingsFile, prompt string) error {
-	args := []string{"--session-id", s.SessionID, "--settings", settingsFile}
-	if prompt != "" {
-		args = append(args, prompt)
+func spawnSession(s *Session, hookURL string) error {
+	adapter := s.adapter()
+	if adapter == nil {
+		return fmt.Errorf("unknown cli: %q", s.CLI)
 	}
 
-	cmd := exec.Command("claude", args...)
-	cmd.Dir = s.Cwd
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"AGENTCTL_AGENT_ID="+s.ID,
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd, cleanup, err := adapter.Spawn(SpawnRequest{
+		SessionID: s.SessionID,
+		Cwd:       s.Cwd,
+		Prompt:    s.Prompt,
+		HookURL:   hookURL,
+		AgentID:   s.ID,
+	})
+	if err != nil {
+		return err
+	}
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		cleanup()
 		return err
 	}
 	// Publish Cmd/PTY under s.mu so readers via the pty()/cmd() accessors
@@ -36,6 +43,7 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 	s.mu.Lock()
 	s.Cmd = cmd
 	s.PTY = ptmx
+	s.spawnCleanup = cleanup
 	s.mu.Unlock()
 
 	// Default a reasonable window size; xterm.js sends resize elsewhere if we add it later.
@@ -43,7 +51,7 @@ func spawnClaude(s *Session, settingsFile, prompt string) error {
 
 	// Start the numbered-menu detector — polls the ring buffer every 250ms
 	// and publishes MenuOptions to the session state so the UI can render
-	// clickable buttons for any TUI selection Claude opens.
+	// clickable buttons for any TUI selection the CLI opens.
 	startMenuDetector(s.ctx, s)
 
 	go func() {

@@ -10,10 +10,10 @@ package main
 //     totals, MessageCount, UpdatedAt, and the ring buffer state.
 //
 //   - Cmd, PTY, SettingsDir, and HookToken are set ONCE — in newSession or
-//     spawnClaude — before the session is published to the package-level
+//     spawnSession — before the session is published to the package-level
 //     registry, and are then treated as immutable. They are read through the
 //     pty() / cmd() accessors, which take s.mu to establish a
-//     happens-before edge with the writer in spawnClaude (see issue #3).
+//     happens-before edge with the writer in spawnSession (see issue #3).
 //     Direct field reads are avoided to keep the race detector quiet and
 //     to make the ownership boundary obvious.
 //
@@ -91,14 +91,19 @@ type AskQuestionRequest struct {
 }
 
 type Session struct {
-	ID             string
-	SessionID      string
-	HookToken      string
-	Cwd            string
-	Prompt         string
+	ID        string
+	SessionID string
+	HookToken string
+	Cwd       string
+	Prompt    string
+	// CLI selects the CLIAdapter that spawned this session. Empty string
+	// resolves to the default ("claude") via getAdapter so pre-#46 code
+	// paths and older on-disk state keep working. See src/cli.go.
+	CLI            string `json:"cli"`
 	Cmd            *exec.Cmd
 	PTY            *os.File
 	SettingsDir    string
+	spawnCleanup   func()
 	Status         string
 	LastActivity   string
 	CurrentTask    string
@@ -217,8 +222,16 @@ func newSession(id, sid, cwd, prompt string) *Session {
 	return s
 }
 
+// adapter looks up the CLIAdapter for this session from the registry.
+// Empty s.CLI resolves to the default ("claude") — see getAdapter. We
+// don't cache the pointer on the Session so serialization stays trivial
+// (just a string) and hot-reloading the registry (tests) works.
+func (s *Session) adapter() CLIAdapter {
+	return getAdapter(s.CLI)
+}
+
 // pty returns the session's PTY handle under s.mu. PTY is set once in
-// spawnClaude and then treated as immutable; the lock here just establishes
+// spawnSession and then treated as immutable; the lock here just establishes
 // the happens-before edge with that writer (see issue #3).
 func (s *Session) pty() *os.File {
 	s.mu.Lock()
@@ -227,6 +240,7 @@ func (s *Session) pty() *os.File {
 }
 
 // cmd returns the session's *exec.Cmd under s.mu. Same contract as pty().
+// The cmd is set once in spawnSession and treated as immutable thereafter.
 func (s *Session) cmd() *exec.Cmd {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -527,9 +541,22 @@ func (s *Session) toJSON() map[string]any {
 		textTok = int64(outU * s.OutputTextChars / totalChars)
 		toolTok = s.OutputTokens - thinkTok - textTok
 	}
+	// Resolve the adapter once per snapshot — cheap map lookup, but
+	// harmless nil guard so a session with an unknown CLI still
+	// serialises (falls back to the default context limit).
+	adapter := s.adapter()
+	cli := s.CLI
+	if cli == "" {
+		cli = defaultAdapterName
+	}
+	ctxLimit := defaultContextLimit
+	if adapter != nil {
+		ctxLimit = adapter.ModelContextLimit(s.Model)
+	}
 	return map[string]any{
 		"id":                   s.ID,
 		"sessionId":            s.SessionID,
+		"cli":                  cli,
 		"cwd":                  s.Cwd,
 		"prompt":               s.Prompt,
 		"status":               s.Status,
@@ -567,8 +594,8 @@ func (s *Session) toJSON() map[string]any {
 		// #42.1 harness telemetry — context pressure.
 		"model":             s.Model,
 		"lastContextTokens": s.LastContextTokens,
-		"contextLimit":      contextLimitFor(s.Model),
-		"contextUsedPct":    contextUsedPct(s),
+		"contextLimit":      ctxLimit,
+		"contextUsedPct":    contextUsedPctLocked(s.LastContextTokens, ctxLimit),
 		// #42.7 harness telemetry — health score. Computed from the
 		// recent-tool + recent-failure rings and current status. Kept
 		// in-line so the client always gets a fresh score with each
@@ -607,6 +634,13 @@ func removeSession(id string) {
 		}
 		// #39 attachments — best-effort remove files + map entries.
 		cleanupAttachments(id)
+		// #46 CLIAdapter-owned teardown (settings temp dir, etc). Kept
+		// in addition to the legacy SettingsDir cleanup below so any
+		// code path that populated SettingsDir directly (e.g. tests)
+		// still tidies up.
+		if s.spawnCleanup != nil {
+			s.spawnCleanup()
+		}
 		if s.SettingsDir != "" {
 			_ = os.RemoveAll(s.SettingsDir)
 		}
