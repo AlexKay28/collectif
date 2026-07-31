@@ -53,13 +53,21 @@ func contextLimitFor(model string) int {
 // contextUsedPct computes 0.0..1.0 for the LATEST turn's context size
 // against the model's limit. The total for a turn is uncached input +
 // cache-creation + cache-read — that's the full context the model saw.
+// Routes the model→limit lookup through the session's CLIAdapter so each
+// CLI carries its own model catalog (#46).
 func contextUsedPct(s *Session) float64 {
-	total := s.LastContextTokens
-	if total == 0 {
-		return 0
+	limit := defaultContextLimit
+	if a := s.adapter(); a != nil {
+		limit = a.ModelContextLimit(s.Model)
 	}
-	limit := contextLimitFor(s.Model)
-	if limit == 0 {
+	return contextUsedPctLocked(s.LastContextTokens, limit)
+}
+
+// contextUsedPctLocked is the lock-free core, taking already-snapshotted
+// values so callers that already hold s.mu (e.g. toJSON) don't have to
+// re-lock. Same semantics as contextUsedPct.
+func contextUsedPctLocked(total int64, limit int) float64 {
+	if total == 0 || limit == 0 {
 		return 0
 	}
 	pct := float64(total) / float64(limit)
@@ -106,13 +114,17 @@ func maybeBroadcastContextPressure(s *Session) {
 	if crossed == "" {
 		return
 	}
+	limit := defaultContextLimit
+	if a := s.adapter(); a != nil {
+		limit = a.ModelContextLimit(s.Model)
+	}
 	broadcastDashboard(map[string]any{
-		"type":     "context_pressure",
-		"id":       s.ID,
-		"level":    crossed,
-		"pct":      pct,
-		"tokens":   s.LastContextTokens,
-		"limit":    contextLimitFor(s.Model),
+		"type":   "context_pressure",
+		"id":     s.ID,
+		"level":  crossed,
+		"pct":    pct,
+		"tokens": s.LastContextTokens,
+		"limit":  limit,
 	})
 }
 

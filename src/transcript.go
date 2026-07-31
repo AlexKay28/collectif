@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// startTranscriptWatcher polls the JSONL transcript file for the session and
-// sums assistant-message token usage into the session totals. The schema is
-// defensively parsed: we look for a `usage` object at the top level, under
-// `message`, or under `response`, and accept whatever integer fields it holds.
+// startTranscriptWatcher polls the transcript file for the session and sums
+// per-turn usage into the session totals. Line parsing is delegated to the
+// session's CLIAdapter — see ParseTranscriptLine on the adapter for the
+// per-CLI schema (#46 Phase 1).
 func startTranscriptWatcher(ctx context.Context, s *Session) {
 	s.mu.Lock()
 	if s.watching || s.TranscriptPath == "" {
@@ -99,6 +99,10 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 			// we see this tick. Written through to Session below.
 			var lastCtx int64
 			var lastModel string
+			// #46 Route per-line parsing through the session's CLIAdapter.
+			// Snapshotting once per tick is fine: the adapter is stateless
+			// and s.CLI is immutable-after-publish.
+			adapter := s.adapter()
 			for {
 				line, err := br.ReadBytes('\n')
 				read += int64(len(line))
@@ -109,22 +113,23 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 					break
 				}
 				partial = partial[:0]
-				if len(strings.TrimSpace(string(line))) > 0 {
-					if in, out, cr, cc, thinkCh, textCh, toolCh, ok := extractUsageAndChars(line); ok {
-						addedIn += in
-						addedOut += out
-						addedCR += cr
-						addedCC += cc
-						addedThinkChars += thinkCh
-						addedTextChars += textCh
-						addedToolChars += toolCh
+				if len(strings.TrimSpace(string(line))) > 0 && adapter != nil {
+					ev, perr := adapter.ParseTranscriptLine(line)
+					if perr == nil && ev.HasUsage {
+						addedIn += int64(ev.InputTokens)
+						addedOut += int64(ev.OutputTokens)
+						addedCR += int64(ev.CacheReadTokens)
+						addedCC += int64(ev.CacheCreationTokens)
+						addedThinkChars += ev.ThinkingChars
+						addedTextChars += ev.TextChars
+						addedToolChars += ev.ToolChars
 						addedMsgs++
 						// #42.1 track LAST turn's total context + model,
 						// separate from cumulative counters. A turn's
 						// context is uncached + cache-read + cache-create.
-						lastCtx = in + cr + cc
-						if m := extractModel(line); m != "" {
-							lastModel = m
+						lastCtx = int64(ev.InputTokens + ev.CacheReadTokens + ev.CacheCreationTokens)
+						if ev.Model != "" {
+							lastModel = ev.Model
 						}
 					}
 				}

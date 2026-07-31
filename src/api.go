@@ -35,6 +35,9 @@ const maxBodyBytes = 1 << 20
 type spawnReq struct {
 	Cwd    string `json:"cwd"`
 	Prompt string `json:"prompt"`
+	// #46 optional CLI selection. Empty defaults to "claude" for
+	// backward compatibility with pre-#46 clients.
+	CLI string `json:"cli"`
 	// #35 per-session USD cap. Optional; 0 = no cap.
 	CostCapUSD float64 `json:"cost_cap_usd"`
 }
@@ -57,6 +60,18 @@ func (srv *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// #46 resolve the requested CLI adapter. Empty → default ("claude").
+		// An unknown name is a client error so bad configs surface here
+		// rather than a cryptic spawn failure later.
+		cliName := req.CLI
+		if cliName == "" {
+			cliName = defaultAdapterName
+		}
+		if getAdapter(cliName) == nil {
+			http.Error(w, "unknown cli: "+cliName, http.StatusBadRequest)
+			return
+		}
+
 		// #35 hourly cap check — refuse to spawn if the last hour of spend
 		// already exceeds the configured hourly cap.
 		if hourCap := GetConfig().CostCapHourUSD; hourCap > 0 {
@@ -71,19 +86,16 @@ func (srv *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		hookTok := uuid.NewString()
 		s := newSession(agentID, sessionID, req.Cwd, req.Prompt)
 		s.HookToken = hookTok
+		s.CLI = cliName // #46
 		if req.CostCapUSD > 0 {
 			s.CostCapUSD = req.CostCapUSD // #35
 		}
 
-		settingsDir, settingsFile, err := writeHookSettings(srv.hookURL(hookTok))
-		if err != nil {
-			http.Error(w, "settings gen: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.SettingsDir = settingsDir
-
 		registerSession(s)
-		if err := spawnClaude(s, settingsFile, req.Prompt); err != nil {
+		// #46 spawnSession routes through the CLIAdapter registry; the
+		// adapter owns settings-file writing and returns a cleanup we
+		// invoke on session teardown (via s.spawnCleanup in removeSession).
+		if err := spawnSession(s, srv.hookURL(hookTok)); err != nil {
 			removeSession(agentID)
 			http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
 			return
