@@ -26,7 +26,7 @@
 
   <div id="main">
     <aside id="sidebar">
-      <button class="add-agent-suggest" id="new-btn" type="button" aria-label="Add Agent" data-testid="add-agent" title="Spawn a new Claude Code session">
+      <button class="add-agent-suggest" id="new-btn" type="button" aria-label="Add Agent" data-testid="add-agent" title="Spawn a new coding-agent CLI session">
         <span class="plus" aria-hidden="true">+</span> Add Agent
       </button>
       <div id="sidebar-list"></div>
@@ -178,7 +178,14 @@
 <div id="modal">
   <div class="box">
     <h3>Spawn a new agent</h3>
-    <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">A new Claude Code session will start in a PTY on this server.</div>
+    <div id="modal-subtitle" style="color: var(--muted); font-size: 12px; margin-top: 4px;">A new coding-agent CLI session will start in a PTY on this server.</div>
+    <!-- #46 Phase 3 CLI picker. Populated on first modal-open from
+         GET /api/cli (cached client-side). Preselects the default
+         adapter unless localStorage remembers a different last-used
+         one. -->
+    <label>CLI
+      <select id="cli-input" aria-label="Choose which coding-agent CLI to spawn"></select>
+    </label>
     <label>Working directory (absolute path)
       <input id="cwd-input" placeholder="/home/you/project" />
       <div id="cwd-hint" class="cwd-hint"></div>

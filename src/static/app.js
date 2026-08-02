@@ -84,6 +84,7 @@ function connectDashboardWS() {
 let cwdInput = null;
 let cwdHint = null;
 let createBtn = null;
+let cliInput = null;
 let cwdValid = false;
 let cwdCheckTimer = 0;
 let cwdCheckSeq = 0;
@@ -91,7 +92,70 @@ let cwdCheckEndpointMissing = false;
 function updateCreateBtn() {
   if (!createBtn || !cwdInput) return;
   const empty = !cwdInput.value.trim();
-  createBtn.disabled = empty || (!cwdCheckEndpointMissing && !cwdValid);
+  // #46 Defensive: also refuse to spawn if the CLI selector somehow
+  // ended up empty. Should never happen in practice (fetchCLIs
+  // preselects and there's always at least "claude"), but guards
+  // against a broken /api/cli response leaving the picker blank.
+  const cliEmpty = !!cliInput && !cliInput.value;
+  createBtn.disabled = empty || cliEmpty || (!cwdCheckEndpointMissing && !cwdValid);
+}
+
+// #46 Phase 3: CLI adapter cache. Fetched once at boot (idempotent — retried
+// on modal open if the initial call failed) and shared with the rest of the
+// UI via window.collectifCLIs so per-session panel renderers can look up
+// capabilities by adapter name.
+window.collectifCLIs = [];        // full /api/cli response, sorted default-first
+window.collectifCLIByName = {};   // { "claude": {...}, "codex": {...}, ... }
+const CLI_LAST_USED_KEY = "collectif.lastCLI";
+
+async function fetchCLIs() {
+  try {
+    const res = await fetch("/api/cli");
+    if (!res.ok) return null;
+    const list = await res.json();
+    if (!Array.isArray(list)) return null;
+    window.collectifCLIs = list;
+    const byName = {};
+    for (const e of list) if (e && e.name) byName[e.name] = e;
+    window.collectifCLIByName = byName;
+    return list;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Populate the <select id="cli-input"> with one <option> per adapter. Called
+// on modal open. If /api/cli hasn't been fetched yet (initial call failed or
+// still in flight), fetches now and retries once. Preselects the last-used
+// CLI from localStorage, falling back to the server-side default (marked with
+// isDefault: true — always "claude" today).
+async function populateCLIPicker() {
+  if (!cliInput) return;
+  let list = window.collectifCLIs;
+  if (!list || list.length === 0) {
+    list = await fetchCLIs();
+  }
+  if (!list || list.length === 0) {
+    // Endpoint unreachable — degrade to a hidden "claude" default so
+    // spawn still works. Old servers without /api/cli hit this path.
+    cliInput.innerHTML = '<option value="claude" selected>claude</option>';
+    updateCreateBtn();
+    return;
+  }
+  // Determine preselection: last-used > default flag > first entry.
+  let last = "";
+  try { last = localStorage.getItem(CLI_LAST_USED_KEY) || ""; } catch (_) {}
+  const has = list.some(e => e.name === last);
+  if (!has) {
+    const def = list.find(e => e.isDefault);
+    last = def ? def.name : list[0].name;
+  }
+  cliInput.innerHTML = list.map(e => {
+    const lab = e.version ? (e.name + " (" + e.version + ")") : e.name;
+    const sel = e.name === last ? " selected" : "";
+    return '<option value="' + esc(e.name) + '"' + sel + '>' + esc(lab) + '</option>';
+  }).join("");
+  updateCreateBtn();
 }
 async function validateCwd(path) {
   if (cwdCheckEndpointMissing) { updateCreateBtn(); return; }
@@ -148,6 +212,7 @@ function boot() {
   cwdInput = document.getElementById("cwd-input");
   cwdHint = document.getElementById("cwd-hint");
   createBtn = document.getElementById("create-btn");
+  cliInput = document.getElementById("cli-input");
   cwdInput.addEventListener("input", () => {
     if (cwdCheckTimer) clearTimeout(cwdCheckTimer);
     const path = cwdInput.value.trim();
@@ -157,6 +222,14 @@ function boot() {
     if (!path) { cwdValid = false; updateCreateBtn(); }
     cwdCheckTimer = setTimeout(() => validateCwd(path), 300);
   });
+  // #46 keep the Spawn button gate honest when the CLI selection changes
+  // (empty selection blocks the button).
+  if (cliInput) cliInput.addEventListener("change", updateCreateBtn);
+
+  // #46 Prefetch the adapter list at boot so the modal opens without a
+  // network wait. Non-blocking — populateCLIPicker retries on modal-open
+  // if this initial fetch failed (offline start, endpoint 500, etc).
+  fetchCLIs();
 
   document.getElementById("new-btn").onclick = () => {
     cwdInput.value = "";
@@ -166,6 +239,10 @@ function boot() {
     cwdHint.textContent = "";
     cwdHint.className = "cwd-hint";
     cwdValid = false;
+    // #46 Populate the CLI picker each time the modal opens so version
+    // changes surface without a page reload. Cache is in-memory so the
+    // second open is essentially free.
+    populateCLIPicker();
     updateCreateBtn();
     document.getElementById("modal").classList.add("show");
     cwdInput.focus();
@@ -177,13 +254,19 @@ function boot() {
     // #35 optional per-session cap.
     const capEl = document.getElementById("cap-input");
     const cost_cap_usd = capEl ? (parseFloat(capEl.value) || 0) : 0;
+    // #46 CLI selection. Defaults to "claude" when the picker is missing
+    // (e.g. old cached index.html served from a service worker) so the
+    // request stays backward-compatible.
+    const cli = cliInput ? (cliInput.value || "claude") : "claude";
     if (!cwd) { toast.error("cwd is required"); return; }
     const res = await fetch("/api/agents", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({cwd, prompt, cost_cap_usd}),
+      body: JSON.stringify({cli, cwd, prompt, cost_cap_usd}),
     });
     if (!res.ok) { toast.error("Spawn failed: " + await res.text()); return; }
+    // #46 Remember the last-used CLI so the next spawn preselects it.
+    try { localStorage.setItem(CLI_LAST_USED_KEY, cli); } catch (_) {}
     document.getElementById("modal").classList.remove("show");
   };
 
