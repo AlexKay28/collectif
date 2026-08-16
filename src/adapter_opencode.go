@@ -152,13 +152,11 @@ var opencodeContextLimits = []struct {
 	Prefix string
 	Limit  int
 }{
-	// Anthropic (Claude family), same numbers as harness.go's contextLimits.
-	{"claude-opus-4", 200000},
-	{"claude-sonnet-4", 200000},
-	{"claude-haiku-4", 200000},
-	{"claude-opus-3", 200000},
-	{"claude-sonnet-3", 200000},
-	{"claude-haiku-3", 200000},
+	// The Anthropic (Claude) family is NOT listed here. It resolves from
+	// claudeModels in adapter_claude.go — see ModelContextLimit below.
+	// A second copy of those numbers is what #48 was: this table said 200k
+	// for models with a 1M window, so an opencode session proxying Claude
+	// had exactly the same 5x-high pressure gauge as the Claude adapter.
 
 	// OpenAI GPT family — approximate widely-published context windows.
 	// Numbers are the *input* context window; the pressure gauge only
@@ -189,6 +187,11 @@ var opencodeContextLimits = []struct {
 func (a *opencodeAdapter) ModelContextLimit(model string) int {
 	if model == "" {
 		return defaultContextLimit
+	}
+	// Claude ids resolve from the shared catalog so there is exactly one
+	// place to correct when Anthropic ships a new window (#48).
+	if m, ok := lookupModel(claudeModels, model); ok && m.ContextWindow > 0 {
+		return m.ContextWindow
 	}
 	for _, m := range opencodeContextLimits {
 		if strings.HasPrefix(model, m.Prefix) {

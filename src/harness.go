@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,36 +20,11 @@ import (
 
 // ─── #42.1 Context window pressure ──────────────────────────────────────
 
-// Anthropic model context windows in tokens. The prefix match runs against
-// the "model" field on assistant messages, e.g. "claude-opus-4-7-20260115".
-var contextLimits = []struct {
-	Prefix string
-	Limit  int
-}{
-	{"claude-opus-4", 200000},
-	{"claude-sonnet-4", 200000},
-	{"claude-haiku-4", 200000},
-	{"claude-opus-3", 200000},
-	{"claude-sonnet-3", 200000},
-	{"claude-haiku-3", 200000},
-}
-
-const defaultContextLimit = 200000
-
-// contextLimitFor returns the context window size in tokens for the given
-// model string. Falls back to 200k if the model is unknown so the UI
-// still renders a sensible pressure gauge.
-func contextLimitFor(model string) int {
-	if model == "" {
-		return defaultContextLimit
-	}
-	for _, m := range contextLimits {
-		if strings.HasPrefix(model, m.Prefix) {
-			return m.Limit
-		}
-	}
-	return defaultContextLimit
-}
+// Model context windows live on the adapter that speaks to the model —
+// see provider.go for ModelInfo and adapter_claude.go for the catalog.
+// #48 removed the package-level table that used to live here: nothing
+// owned it, nothing could verify it, and it had drifted far enough that
+// every current 1M-window model was reported as 200k.
 
 // contextUsedPct computes 0.0..1.0 for the LATEST turn's context size
 // against the model's limit. The total for a turn is uncached input +
@@ -79,25 +55,36 @@ func contextUsedPctLocked(total int64, limit int) float64 {
 
 // ─── #42.1 Threshold-crossing broadcasts ────────────────────────────────
 
-// contextWarnFired tracks whether each session has already been warned
+// contextThresholds tracks whether each session has already been warned
 // at the 70% / 90% thresholds so we don't spam the dashboard every turn.
 type contextThresholds struct {
 	warned70, warned90 bool
 }
 
-var contextWarnState = map[string]*contextThresholds{}
-var contextWarnMu = struct {
-	m map[string]*contextThresholds
-}{m: contextWarnState}
+// contextWarnMu guards contextWarnState and the contextThresholds values
+// it holds. startTranscriptWatcher runs one goroutine per session and each
+// writes this map, so it must be locked — #48. (It previously wasn't: the
+// name was taken by a struct that merely wrapped the map, which read like
+// synchronisation and provided none.)
+var (
+	contextWarnMu    sync.Mutex
+	contextWarnState = map[string]*contextThresholds{}
+)
 
 // maybeBroadcastContextPressure fires a WS event when a session crosses
 // 70% or 90% context usage — mirrors the cost_warning shape from #35.
 // Called from the transcript watcher after each successful usage read.
-func maybeBroadcastContextPressure(s *Session) {
+//
+// Returns the level crossed on this call ("warn" or "critical"), or "" when
+// nothing was broadcast — either the session is below the threshold or it
+// has already been warned at this level. The return value exists so the
+// threshold logic is testable without standing up a WS subscriber.
+func maybeBroadcastContextPressure(s *Session) string {
 	pct := contextUsedPct(s)
 	if pct < 0.7 {
-		return
+		return ""
 	}
+	contextWarnMu.Lock()
 	st, ok := contextWarnState[s.ID]
 	if !ok {
 		st = &contextThresholds{}
@@ -111,8 +98,10 @@ func maybeBroadcastContextPressure(s *Session) {
 		st.warned70 = true
 		crossed = "warn"
 	}
+	contextWarnMu.Unlock()
+
 	if crossed == "" {
-		return
+		return ""
 	}
 	limit := defaultContextLimit
 	if a := s.adapter(); a != nil {
@@ -126,13 +115,16 @@ func maybeBroadcastContextPressure(s *Session) {
 		"tokens": s.LastContextTokens,
 		"limit":  limit,
 	})
+	return crossed
 }
 
 // resetContextWarn clears the "already warned" flags when a compaction is
 // detected — after context drops, we want to warn again if it climbs back.
 // (Compaction detection is #42.2, deferred; this hook stays wired for it.)
 func resetContextWarn(sessionID string) {
+	contextWarnMu.Lock()
 	delete(contextWarnState, sessionID)
+	contextWarnMu.Unlock()
 }
 
 // ─── #42.7 Session health score ─────────────────────────────────────────
@@ -289,7 +281,7 @@ func computeHealthLocked(
 	updatedAt time.Time,
 	status string,
 	lastContext int64,
-	model string,
+	contextLimit int,
 ) (int, string) {
 	score := 100
 	reason := "healthy"
@@ -308,7 +300,7 @@ func computeHealthLocked(
 		}
 	}
 
-	if lastContext > 0 && float64(lastContext)/float64(contextLimitFor(model)) > 0.9 {
+	if lastContext > 0 && contextLimit > 0 && float64(lastContext)/float64(contextLimit) > 0.9 {
 		score -= 10
 		if reason == "healthy" {
 			reason = "context >90%, compaction imminent"
@@ -337,6 +329,8 @@ func computeHealthLocked(
 
 // computeHealth is the convenience wrapper for callers that don't
 // already hold s.mu. Snapshots the required fields, releases, computes.
+// The context limit is resolved through the session's adapter rather than
+// a package-level table — see #48.
 func computeHealth(s *Session) (int, string) {
 	s.mu.Lock()
 	calls := append([]ToolCallRecord(nil), s.RecentToolCalls...)
@@ -346,5 +340,10 @@ func computeHealth(s *Session) (int, string) {
 	lastContext := s.LastContextTokens
 	model := s.Model
 	s.mu.Unlock()
-	return computeHealthLocked(calls, fails, updatedAt, status, lastContext, model)
+
+	limit := defaultContextLimit
+	if a := s.adapter(); a != nil {
+		limit = a.ModelContextLimit(model)
+	}
+	return computeHealthLocked(calls, fails, updatedAt, status, lastContext, limit)
 }

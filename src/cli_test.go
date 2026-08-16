@@ -98,13 +98,16 @@ func TestClaudeAdapterParseTranscriptLineNoUsage(t *testing.T) {
 	}
 }
 
-// TestClaudeAdapterModelContextLimit — sanity check that the adapter's
-// context-limit lookup is wired to the same map contextLimitFor uses.
-// The exact numbers live in harness.go; this test just confirms we
-// route through the adapter rather than duplicating the table.
+// TestClaudeAdapterModelContextLimit — sanity check that the adapter
+// resolves ids against its own catalog (claudeModels in adapter_claude.go).
+// The per-model values are asserted in harness_test.go; this test just
+// confirms the routing and the empty-model fallback.
+//
+// #48: this previously asserted 200000 for a 1M-window model, encoding the
+// stale table it was written against.
 func TestClaudeAdapterModelContextLimit(t *testing.T) {
 	a := getAdapter("claude")
-	if got, want := a.ModelContextLimit("claude-opus-4-7-20260115"), 200000; got != want {
+	if got, want := a.ModelContextLimit("claude-opus-4-7-20260115"), 1_000_000; got != want {
 		t.Errorf("ModelContextLimit(opus)=%d, want %d", got, want)
 	}
 	if got, want := a.ModelContextLimit(""), defaultContextLimit; got != want {

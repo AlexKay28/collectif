@@ -493,12 +493,26 @@ func (s *Session) pushTask(prompt string) {
 func (s *Session) toJSON() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Resolve the adapter and the model's context window first — both the
+	// health score and the pressure gauge below need the limit, and #48
+	// requires it to come from the adapter rather than a package-level
+	// table. Cheap map lookup; the nil guard keeps a session with an
+	// unknown CLI serialisable.
+	adapter := s.adapter()
+	cli := s.CLI
+	if cli == "" {
+		cli = defaultAdapterName
+	}
+	ctxLimit := defaultContextLimit
+	if adapter != nil {
+		ctxLimit = adapter.ModelContextLimit(s.Model)
+	}
 	// #42.7 compute health under the lock so the snapshot is consistent
 	// with everything else we're about to serialise. Uses the Locked
 	// variant to avoid a re-lock deadlock.
 	healthScore, healthReason := computeHealthLocked(
 		s.RecentToolCalls, s.RecentFailures,
-		s.UpdatedAt, s.Status, s.LastContextTokens, s.Model,
+		s.UpdatedAt, s.Status, s.LastContextTokens, ctxLimit,
 	)
 	activity := make([]ActivityEntry, len(s.Activity))
 	copy(activity, s.Activity)
@@ -540,18 +554,6 @@ func (s *Session) toJSON() map[string]any {
 		thinkTok = int64(outU * s.OutputThinkingChars / totalChars)
 		textTok = int64(outU * s.OutputTextChars / totalChars)
 		toolTok = s.OutputTokens - thinkTok - textTok
-	}
-	// Resolve the adapter once per snapshot — cheap map lookup, but
-	// harmless nil guard so a session with an unknown CLI still
-	// serialises (falls back to the default context limit).
-	adapter := s.adapter()
-	cli := s.CLI
-	if cli == "" {
-		cli = defaultAdapterName
-	}
-	ctxLimit := defaultContextLimit
-	if adapter != nil {
-		ctxLimit = adapter.ModelContextLimit(s.Model)
 	}
 	return map[string]any{
 		"id":                   s.ID,
