@@ -143,8 +143,12 @@ type notebookCreatedPayload struct {
 	Root  string `json:"root"`
 }
 
+// metaSetPayload carries notebook-level settings. Pointers so "not
+// supplied" stays distinct from "set to empty" — renaming a notebook and
+// changing its default model are independent edits.
 type metaSetPayload struct {
-	Meta NotebookMeta `json:"meta"`
+	Title *string       `json:"title,omitempty"`
+	Meta  *NotebookMeta `json:"meta,omitempty"`
 }
 
 type cellInsertedPayload struct {
@@ -229,7 +233,12 @@ func applyEvent(nb *Notebook, e Event) error {
 		if err := decodePayload(e, &p); err != nil {
 			return err
 		}
-		nb.Meta = p.Meta
+		if p.Title != nil {
+			nb.Title = *p.Title
+		}
+		if p.Meta != nil {
+			nb.Meta = *p.Meta
+		}
 
 	case evCellInserted:
 		var p cellInsertedPayload

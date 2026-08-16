@@ -17,13 +17,18 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // nbSnapshotEvery is how many appends pass before the cache is rewritten.
@@ -52,6 +57,11 @@ type notebookStore struct {
 	log           *os.File
 	sinceSnapshot int
 	closed        bool
+
+	// subMu guards subs ONLY, and is never held while mu is held (or vice
+	// versa) — the two are strictly independent, as in session.go.
+	subMu sync.Mutex
+	subs  map[*wsSub]bool
 }
 
 func (st *notebookStore) logPath() string  { return filepath.Join(st.dir, st.slug+".jsonl") }
@@ -195,23 +205,33 @@ func (st *notebookStore) Append(typ string, payload any) (Event, error) {
 	}
 
 	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.closed {
+		st.mu.Unlock()
 		return Event{}, fmt.Errorf("notebook %s is closed", st.slug)
 	}
 
 	// Fold before writing so a rejected event never reaches the log.
 	if err := applyEvent(st.nb, e); err != nil {
+		st.mu.Unlock()
 		return Event{}, err
 	}
 	if _, err := st.log.Write(append(line, '\n')); err != nil {
+		st.mu.Unlock()
 		return Event{}, fmt.Errorf("append to notebook log: %w", err)
 	}
+
+	// The position this event was applied at — see broadcastEvent.
+	seq := st.nb.Version
 
 	st.sinceSnapshot++
 	if st.sinceSnapshot >= nbSnapshotEvery {
 		st.writeSnapshotLocked()
 	}
+	st.mu.Unlock()
+
+	// Fan out after releasing mu: a slow subscriber must never hold up the
+	// next append, and taking subMu under mu would couple the two locks.
+	st.broadcastEvent(seq, e)
 	return e, nil
 }
 
@@ -255,8 +275,278 @@ func (st *notebookStore) writeSnapshotLocked() {
 	st.sinceSnapshot = 0
 }
 
-// The per-notebook registry (one shared store per slug, so two browser tabs
-// fold the same document rather than racing two handles onto one log) lands
-// with the HTTP and WS layer that consumes it. Nothing in this slice opens a
-// notebook concurrently, and a registry with no caller is a registry with no
-// test.
+// ─── Subscribers ────────────────────────────────────────────────────────
+
+// nbQueueDepth is the per-connection outbound queue. Deeper than the
+// dashboard's because a running cell emits events in bursts; still bounded,
+// so one stalled browser tab can't grow memory without limit.
+const nbQueueDepth = 256
+
+// addSub registers a websocket for this notebook's event stream. Reuses
+// wsSub from session.go: it already drops for a client that has fallen
+// behind rather than blocking the writer, which is the behaviour we want
+// here too (a dropped event is recovered by reconnecting and re-folding).
+func (st *notebookStore) addSub(c *websocket.Conn) *wsSub {
+	sub := newWSSub(c, websocket.TextMessage, nbQueueDepth)
+	st.subMu.Lock()
+	if st.subs == nil {
+		st.subs = map[*wsSub]bool{}
+	}
+	st.subs[sub] = true
+	st.subMu.Unlock()
+	return sub
+}
+
+func (st *notebookStore) removeSub(sub *wsSub) {
+	st.subMu.Lock()
+	delete(st.subs, sub)
+	st.subMu.Unlock()
+	sub.stop()
+}
+
+// broadcastEvent fans one event out to subscribers. Never called with
+// st.mu held — subMu and mu are independent, in the same way session.go
+// keeps s.subMu and s.mu apart.
+//
+// seq is the log position the event was applied at, and it is what makes
+// the connect handshake safe: a client subscribes before it receives the
+// fold, so an event racing that window can arrive first. Carrying the
+// position lets the client drop anything already folded in (seq <=
+// fold.version) instead of applying it twice.
+func (st *notebookStore) broadcastEvent(seq int, e Event) {
+	msg, err := json.Marshal(map[string]any{"type": "event", "seq": seq, "event": e})
+	if err != nil {
+		return
+	}
+	st.subMu.Lock()
+	subs := make([]*wsSub, 0, len(st.subs))
+	for sub := range st.subs {
+		subs = append(subs, sub)
+	}
+	st.subMu.Unlock()
+	for _, sub := range subs {
+		sub.send(msg)
+	}
+}
+
+func (st *notebookStore) closeSubs() {
+	st.subMu.Lock()
+	subs := make([]*wsSub, 0, len(st.subs))
+	for sub := range st.subs {
+		subs = append(subs, sub)
+	}
+	st.subs = nil
+	st.subMu.Unlock()
+	for _, sub := range subs {
+		sub.stop()
+	}
+}
+
+// ─── Registry ───────────────────────────────────────────────────────────
+
+// One shared store per slug, so two browser tabs fold the same document
+// rather than racing two handles onto one log.
+//
+// Lock ordering is nbRegistryMu -> st.mu, never the reverse — the same rule
+// session.go documents for registryMu.
+var (
+	nbRegistryMu sync.Mutex
+	nbRegistry   = map[string]*notebookStore{}
+)
+
+// nbDirFn is the notebooks-directory seam. Tests point it at a temp dir;
+// the default anchors to the repo like the gh cache does.
+var nbDirFn = defaultNotebooksDir
+
+func defaultNotebooksDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	return filepath.Join(repoRoot(cwd), ".collectif", "notebooks")
+}
+
+var errNotebookNotFound = errors.New("notebook not found")
+
+// nbSlugRe bounds a slug to something that is unambiguously one path
+// segment. The slug becomes a filename, so this is a containment check
+// before it is a formatting preference: no separators, no dots, no escapes,
+// no control bytes, bounded length.
+var nbSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+func validNotebookSlug(slug string) bool { return nbSlugRe.MatchString(slug) }
+
+// acquireNotebook returns the shared store for slug, opening it if it is
+// not already open. Unknown notebooks are an error, not an empty notebook —
+// a typo in a URL must not silently create a document.
+func acquireNotebook(slug string) (*notebookStore, error) {
+	if !validNotebookSlug(slug) {
+		return nil, fmt.Errorf("invalid notebook id %q", slug)
+	}
+	nbRegistryMu.Lock()
+	defer nbRegistryMu.Unlock()
+
+	if st, ok := nbRegistry[slug]; ok && !st.isClosed() {
+		return st, nil
+	}
+	dir := nbDirFn()
+	if _, err := os.Stat(filepath.Join(dir, slug+".jsonl")); err != nil {
+		return nil, errNotebookNotFound
+	}
+	st, err := openNotebookStore(dir, slug, "", "")
+	if err != nil {
+		return nil, err
+	}
+	nbRegistry[slug] = st
+	return st, nil
+}
+
+// createNotebook makes a new notebook whose slug is derived from the title
+// and made unique against what is already on disk.
+func createNotebook(title, root string) (*notebookStore, error) {
+	nbRegistryMu.Lock()
+	defer nbRegistryMu.Unlock()
+
+	dir := nbDirFn()
+	slug, err := uniqueNotebookSlug(dir, title)
+	if err != nil {
+		return nil, err
+	}
+	st, err := openNotebookStore(dir, slug, title, root)
+	if err != nil {
+		return nil, err
+	}
+	nbRegistry[slug] = st
+	return st, nil
+}
+
+func releaseNotebook(slug string) error {
+	nbRegistryMu.Lock()
+	st, ok := nbRegistry[slug]
+	delete(nbRegistry, slug)
+	nbRegistryMu.Unlock()
+	if !ok {
+		return nil
+	}
+	st.closeSubs()
+	return st.Close()
+}
+
+// closeAllNotebooks releases every open notebook. Used on shutdown, and by
+// tests to keep package-level state from leaking between cases.
+func closeAllNotebooks() {
+	nbRegistryMu.Lock()
+	stores := make([]*notebookStore, 0, len(nbRegistry))
+	for _, st := range nbRegistry {
+		stores = append(stores, st)
+	}
+	nbRegistry = map[string]*notebookStore{}
+	nbRegistryMu.Unlock()
+	for _, st := range stores {
+		st.closeSubs()
+		_ = st.Close()
+	}
+}
+
+func (st *notebookStore) isClosed() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.closed
+}
+
+// slugifyTitle reduces a title to the slug charset. Anything outside it
+// becomes a separator, so a title in any script still yields a usable
+// filename rather than being rejected.
+func slugifyTitle(title string) string {
+	var b strings.Builder
+	lastDash := true // leading dashes are dropped
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		case r == '_':
+			b.WriteRune('_')
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if len(s) > 48 {
+		s = strings.Trim(s[:48], "-")
+	}
+	if !validNotebookSlug(s) {
+		return "notebook"
+	}
+	return s
+}
+
+func uniqueNotebookSlug(dir, title string) (string, error) {
+	base := slugifyTitle(title)
+	for i := 0; i < 1000; i++ {
+		slug := base
+		if i > 0 {
+			slug = fmt.Sprintf("%s-%d", base, i+1)
+		}
+		if !validNotebookSlug(slug) {
+			return "", fmt.Errorf("could not derive a valid id from title %q", title)
+		}
+		if _, inMem := nbRegistry[slug]; inMem {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, slug+".jsonl")); os.IsNotExist(err) {
+			return slug, nil
+		}
+	}
+	return "", fmt.Errorf("could not find a free id for title %q", title)
+}
+
+// notebookSummary is the list-view shape: enough to render a launcher
+// without folding every notebook on disk.
+type notebookSummary struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Root      string    `json:"root"`
+	Cells     int       `json:"cells"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// listNotebooks enumerates the notebooks directory. Each one is folded to
+// read its title, which is fine at launcher scale; if that ever hurts, the
+// snapshot already holds the answer.
+func listNotebooks() ([]notebookSummary, error) {
+	dir := nbDirFn()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []notebookSummary{}, nil
+		}
+		return nil, err
+	}
+	out := []notebookSummary{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		slug := strings.TrimSuffix(e.Name(), ".jsonl")
+		if !validNotebookSlug(slug) {
+			continue
+		}
+		st, err := acquireNotebook(slug)
+		if err != nil {
+			continue // unreadable notebook shouldn't blank the whole list
+		}
+		nb := st.Doc()
+		s := notebookSummary{ID: slug, Title: nb.Title, Root: nb.Root, Cells: len(nb.Cells)}
+		if info, err := e.Info(); err == nil {
+			s.UpdatedAt = info.ModTime().UTC()
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out, nil
+}
