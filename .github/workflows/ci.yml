@@ -8,7 +8,11 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: '1.23' }
       - run: go vet ./...
-      - run: go test ./...
+      # -race: the unsynchronised contextWarnState map in #48 survived
+      # because the suite ran without the detector. One goroutine per
+      # session writes shared state, so races are the failure mode this
+      # codebase is most exposed to — catch them in CI, not in a session.
+      - run: go test -race ./...
       # `go build ./...` would try to write the binary to ./src, colliding
       # with the existing src/ directory. -o discards the artifact; we're
       # only checking that the source compiles.

@@ -145,8 +145,13 @@ func TestOpenCodeAdapterModelContextLimit(t *testing.T) {
 	}{
 		{"", defaultContextLimit},
 		{"unknown-model-xyz", defaultContextLimit},
-		{"claude-opus-4-7-20260115", 200000},
-		{"claude-sonnet-4-1", 200000},
+		// #48: the Claude family is resolved from the single shared
+		// catalog in adapter_claude.go, not a second copy that drifts.
+		// These asserted 200000 while the real window was 1M.
+		{"claude-opus-4-7-20260115", 1_000_000},
+		{"claude-opus-5", 1_000_000},
+		{"claude-sonnet-5", 1_000_000},
+		{"claude-haiku-4-5", 200_000},
 		{"gpt-5-mini-2025", 400000},
 		{"gpt-4o-2024-11", 128000},
 		{"gpt-4.1-turbo", 1000000},

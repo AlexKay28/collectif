@@ -123,9 +123,27 @@ func (a *claudeAdapter) ParseTranscriptLine(raw []byte) (TranscriptEvent, error)
 	}, nil
 }
 
-// ModelContextLimit delegates to the existing contextLimitFor map. Kept in
-// harness.go so the model list stays discoverable next to the pressure
-// logic that consumes it; the adapter is just the routing layer.
+// claudeModels is the context-window catalog for the models Claude Code
+// reports in its transcripts. Entries are matched by longest prefix, so a
+// dated snapshot such as claude-opus-4-7-20260115 resolves to its alias
+// without needing a row of its own.
+//
+// Only models whose window is documented are listed. An id that is absent
+// falls back to defaultContextLimit rather than being guessed at — that
+// guessing is exactly what produced the 5x-high gauge in #48.
+var claudeModels = []ModelInfo{
+	{ID: "claude-opus-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-sonnet-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-fable-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-mythos-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-opus-4-8", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-opus-4-7", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-opus-4-6", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-sonnet-4-6", ContextWindow: 1_000_000, MaxOutput: 128_000},
+	{ID: "claude-haiku-4-5", ContextWindow: 200_000, MaxOutput: 64_000},
+}
+
+// ModelContextLimit resolves a model id against the catalog above.
 func (a *claudeAdapter) ModelContextLimit(model string) int {
-	return contextLimitFor(model)
+	return contextWindowOr(claudeModels, model)
 }
