@@ -177,6 +177,10 @@ func TestProjectClaude_TypedPromptBecomesAUserPart(t *testing.T) {
 	}
 }
 
+// These are recorded (see the injection tests below) but never as turns:
+// they are context the harness supplied, not conversation. The distinction
+// is the whole filter — without it a session's document buries the three
+// sentences a person wrote under several thousand lines of machinery.
 func TestProjectClaude_InjectedUserLinesAreNotTurns(t *testing.T) {
 	cases := []struct {
 		name string
@@ -201,22 +205,13 @@ func TestProjectClaude_InjectedUserLinesAreNotTurns(t *testing.T) {
 			  "attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"…"}}`,
 			"hook output is session machinery, not conversation",
 		},
-		{
-			"system",
-			`{"type":"system","uuid":"d","subtype":"turn_duration","durationMs":2084,
-			  "timestamp":"2026-08-13T11:31:59.169Z"}`,
-			"bookkeeping",
-		},
-		{
-			"file-history-snapshot",
-			`{"type":"file-history-snapshot","uuid":"e","timestamp":"2026-08-13T11:31:59.169Z"}`,
-			"editor state, not a turn",
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if parts := projectLine(t, c.line); len(parts) != 0 {
-				t.Errorf("projected %d parts from a %s line — %s: %+v", len(parts), c.name, c.why, parts)
+			for _, p := range projectLine(t, c.line) {
+				if p.Kind != PartInjection {
+					t.Errorf("a %s line projected a %s part — %s: %+v", c.name, p.Kind, c.why, p)
+				}
 			}
 		})
 	}
@@ -333,9 +328,17 @@ func TestProjectClaude_TaskNotificationsAreNotPrompts(t *testing.T) {
 	  "origin":{"kind":"task-notification"},
 	  "message":{"role":"user","content":"<task-notification>\n<task-id>abc</task-id>\n…"}}`)
 
-	if len(parts) != 0 {
-		t.Errorf("a background-task notification was projected as a prompt (%d parts) — these run to tens of "+
-			"kilobytes and would dwarf every real turn: %+v", len(parts), parts)
+	// Recorded as an injection rather than discarded, but never as a
+	// prompt: these run to tens of kilobytes and would dwarf every real
+	// turn in the conversation.
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts, want 1: %+v", len(parts), parts)
+	}
+	if parts[0].Kind == PartUserText {
+		t.Errorf("a background-task notification was projected as something the user typed: %+v", parts[0])
+	}
+	if parts[0].Kind != PartInjection {
+		t.Errorf("kind = %q, want injection", parts[0].Kind)
 	}
 }
 
@@ -359,7 +362,10 @@ func TestProjectClaude_UnknownOriginIsNotAPrompt(t *testing.T) {
 	  "origin":{"kind":"some-future-injection"},
 	  "message":{"role":"user","content":"whatever this turns out to be"}}`)
 
-	if len(parts) != 0 {
+	// Failing closed still means "not a prompt". It is recorded, because
+	// something the model read is worth keeping, but it does not join the
+	// conversation on the strength of an origin kind we have never seen.
+	if len(parts) != 1 || parts[0].Kind != PartInjection {
 		t.Errorf("an unrecognised origin defaulted to being a prompt: %+v", parts)
 	}
 }
@@ -466,5 +472,326 @@ func TestProjectClaude_PartsCarryTheirParent(t *testing.T) {
 	}
 	if parts[0].ParentUUID != "b1" {
 		t.Errorf("parent = %q, want b1", parts[0].ParentUUID)
+	}
+}
+
+// ─── Context injections ─────────────────────────────────────────────────
+//
+// P0 filtered these out and the document became readable. But filtered out
+// is not the same as thrown away, and throwing them away costs something
+// real: an injection you cannot see is often the whole explanation for why
+// an agent did something surprising. A skill body, a hook's output, a
+// system reminder — the model read all of it, and the notebook claimed the
+// turn began with your prompt.
+//
+// So they are recorded as their own kind: hidden by default, present in the
+// record. What is recorded is the fact, the label and the size, plus a
+// bounded excerpt — not the body. The transcript on disk is the archive;
+// duplicating 47 KB of task notification into our log would make the
+// notebook expensive to be honest.
+
+func TestProjectClaude_HookOutputIsRecordedAsAnInjection(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"attachment","uuid":"x1","timestamp":"2026-08-13T11:31:49.858Z",
+	  "attachment":{"type":"hook_success","hookName":"SessionStart:startup",
+	    "content":"# Project context\nUse the house style.","exitCode":0}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts, want 1: %+v", len(parts), parts)
+	}
+	p := parts[0]
+	if p.Kind != PartInjection {
+		t.Errorf("kind = %q, want injection", p.Kind)
+	}
+	// The label is what makes a list of injections readable at a glance.
+	if !strings.Contains(p.Label, "SessionStart:startup") {
+		t.Errorf("label = %q, want the hook that produced it", p.Label)
+	}
+	if !strings.Contains(p.Text, "house style") {
+		t.Errorf("excerpt = %q", p.Text)
+	}
+	if p.Size == 0 {
+		t.Error("size = 0 — without it the reader cannot tell a one-liner from a novel")
+	}
+}
+
+func TestProjectClaude_InjectedUserTextIsRecordedNotDiscarded(t *testing.T) {
+	cases := []struct {
+		name, line, wantLabel string
+	}{
+		{
+			"skill body injected by a tool",
+			`{"type":"user","uuid":"x2","timestamp":"2026-08-13T11:31:55.950Z",
+			  "isMeta":true,"sourceToolUseID":"toolu_9",
+			  "message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x/y"}]}}`,
+			"tool",
+		},
+		{
+			"command caveat",
+			`{"type":"user","uuid":"x3","timestamp":"2026-08-13T11:31:55.950Z","isMeta":true,
+			  "message":{"role":"user","content":"<local-command-caveat>Caveat: …</local-command-caveat>"}}`,
+			"caveat",
+		},
+		{
+			"background task notification",
+			`{"type":"user","uuid":"x4","timestamp":"2026-08-13T11:31:55.950Z",
+			  "origin":{"kind":"task-notification"},
+			  "message":{"role":"user","content":"<task-notification>\n<task-id>abc</task-id>\n…"}}`,
+			"task",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			parts := projectLine(t, c.line)
+			if len(parts) != 1 {
+				t.Fatalf("got %d parts, want 1 — it was discarded: %+v", len(parts), parts)
+			}
+			if parts[0].Kind != PartInjection {
+				t.Errorf("kind = %q, want injection", parts[0].Kind)
+			}
+			if !strings.Contains(strings.ToLower(parts[0].Label), c.wantLabel) {
+				t.Errorf("label = %q, want something mentioning %q", parts[0].Label, c.wantLabel)
+			}
+		})
+	}
+}
+
+// A 47 KB notification must not put 47 KB into the log. The size says what
+// was injected; the excerpt says what it looked like; the transcript on
+// disk is where the whole thing lives.
+func TestProjectClaude_InjectionExcerptsAreBounded(t *testing.T) {
+	big := strings.Repeat("x", 40000)
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"x5","timestamp":"2026-08-13T11:31:55.950Z",
+	  "origin":{"kind":"task-notification"},
+	  "message":{"role":"user","content":`+jsonString(big)+`}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts: %+v", len(parts), parts)
+	}
+	if len(parts[0].Text) > injectionExcerptMax+4 {
+		t.Errorf("excerpt is %d bytes — the log would grow by the size of everything ever injected",
+			len(parts[0].Text))
+	}
+	if parts[0].Size != len(big) {
+		t.Errorf("size = %d, want %d — the reader has to know what they are not being shown",
+			parts[0].Size, len(big))
+	}
+}
+
+// Bookkeeping is still bookkeeping. Turn durations and editor state were
+// never in the model's context and recording them would bury the things
+// that were.
+func TestProjectClaude_BookkeepingIsStillNotAnInjection(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"system","uuid":"y1","subtype":"turn_duration","durationMs":2084}`,
+		`{"type":"file-history-snapshot","uuid":"y2"}`,
+		`{"type":"queue-operation","uuid":"y3"}`,
+	} {
+		if parts := projectLine(t, line); len(parts) != 0 {
+			t.Errorf("%s projected %+v", line, parts)
+		}
+	}
+}
+
+// A real prompt is still a prompt. The whole filter would be worthless if
+// recording injections re-admitted them as context.
+func TestProjectClaude_RecordingInjectionsDidNotBreakTheFilter(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"y4","timestamp":"2026-08-13T11:31:55.950Z","origin":{"kind":"human"},
+	  "message":{"role":"user","content":"a real prompt"}}`)
+	if len(parts) != 1 || parts[0].Kind != PartUserText {
+		t.Fatalf("a typed prompt became %+v", parts)
+	}
+}
+
+// Attachments are not one shape. A real 3,548-line session carried 804 of
+// them across fifteen types, and the split that matters is not the type
+// name but what the payload is *for*:
+//
+//   - Context put in front of the model: a skill listing, a hook's extra
+//     instructions, the snippet of a file just edited, a queued command.
+//     These explain behaviour, and are exactly what this records.
+//   - The harness talking to the model about itself: 671 copies of
+//     `<total_tokens>N tokens left</total_tokens>`, one per turn. These
+//     explain nothing, and recording 671 of them would bury the skill body
+//     that does — making the list unusable is the same failure as not
+//     recording anything.
+//
+// The rule is deliberately narrow: one excluded type, named, with its
+// reason. A blocklist that grows by guesswork would drift back into
+// hiding things.
+func TestProjectClaude_AttachmentsAreReadFromWhicheverFieldCarriesThem(t *testing.T) {
+	cases := []struct{ name, line, wantLabel, wantIn string }{
+		{
+			"hook stdout",
+			`{"type":"attachment","uuid":"a1","attachment":{"type":"hook_success",
+			  "hookName":"SessionStart:startup","stdout":"{\"hookSpecificOutput\":1}"}}`,
+			"SessionStart:startup", "hookSpecificOutput",
+		},
+		{
+			"hook additional context",
+			`{"type":"attachment","uuid":"a2","attachment":{"type":"hook_additional_context",
+			  "hookName":"SessionStart","content":"You have superpowers."}}`,
+			"SessionStart", "superpowers",
+		},
+		{
+			"an edited file's snippet",
+			`{"type":"attachment","uuid":"a3","attachment":{"type":"edited_text_file",
+			  "filename":"src/main.go","snippet":"func main() {}"}}`,
+			"main.go", "func main",
+		},
+		{
+			"a queued command",
+			`{"type":"attachment","uuid":"a4","attachment":{"type":"queued_command",
+			  "prompt":"run the tests"}}`,
+			"queued", "run the tests",
+		},
+		{
+			"the todo list, re-injected",
+			`{"type":"attachment","uuid":"a5","attachment":{"type":"task_reminder",
+			  "content":"1. do the thing","itemCount":1}}`,
+			"task", "do the thing",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			parts := projectLine(t, c.line)
+			if len(parts) != 1 {
+				t.Fatalf("got %d parts, want 1 — the payload field was not read: %+v", len(parts), parts)
+			}
+			if !strings.Contains(parts[0].Label, c.wantLabel) {
+				t.Errorf("label = %q, want it to mention %q", parts[0].Label, c.wantLabel)
+			}
+			if !strings.Contains(parts[0].Text, c.wantIn) {
+				t.Errorf("excerpt = %q, want it to contain %q", parts[0].Text, c.wantIn)
+			}
+		})
+	}
+}
+
+func TestProjectClaude_TokenBudgetRemindersAreNotRecorded(t *testing.T) {
+	parts := projectLine(t, `{"type":"attachment","uuid":"a6","attachment":{
+	  "type":"total_tokens_reminder","text":"<total_tokens>15000000 tokens left</total_tokens>"}}`)
+
+	if len(parts) != 0 {
+		t.Errorf("the token-budget reminder was recorded — a real session carries 671 of these and "+
+			"they would bury every injection that matters: %+v", parts)
+	}
+}
+
+// An attachment type this build has never seen still gets recorded if it
+// carries a payload. Failing closed on *filtering* is right; failing
+// closed on *recording* would mean the next thing Claude Code starts
+// injecting is invisible until someone notices.
+func TestProjectClaude_UnknownAttachmentTypesAreStillRecorded(t *testing.T) {
+	parts := projectLine(t, `{"type":"attachment","uuid":"a7","attachment":{
+	  "type":"some_future_thing","content":"whatever this is"}}`)
+
+	if len(parts) != 1 || parts[0].Kind != PartInjection {
+		t.Fatalf("an unknown attachment type was dropped: %+v", parts)
+	}
+	// The type name survives as the label, underscores softened to spaces
+	// so the list reads as English rather than as a schema dump.
+	if !strings.Contains(parts[0].Label, "some future thing") {
+		t.Errorf("label = %q, want the type name so it can be recognised", parts[0].Label)
+	}
+}
+
+// An attachment with no payload at all is nothing to record.
+func TestProjectClaude_EmptyAttachmentsProjectNothing(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"attachment","uuid":"a8","attachment":{"type":"command_permissions","allowedTools":[]}}`,
+		`{"type":"attachment","uuid":"a9","attachment":{"type":"hook_success","content":"","stdout":"  "}}`,
+		`{"type":"attachment","uuid":"aa"}`,
+	} {
+		if parts := projectLine(t, line); len(parts) != 0 {
+			t.Errorf("%s projected %+v", line, parts)
+		}
+	}
+}
+
+// A field whose type surprises us must cost us that field, never the line.
+//
+// `attachment.content` is polymorphic in the real format — a string for a
+// hook, an array of blocks for injected context, an object for a file
+// reference. Declaring it as a string made json.Unmarshal fail on the
+// *whole line*, so 79 injections vanished without a trace: no error, no
+// log, just a document quietly missing the "You have superpowers" preamble
+// that shaped every turn under it.
+//
+// This is the same failure as P0's, one level down. There the risk was
+// misreading a field; here it is that one surprising field discards
+// everything around it. The parser has to be tolerant per-field, not
+// all-or-nothing.
+func TestProjectClaude_PolymorphicContentIsFlattened(t *testing.T) {
+	cases := []struct{ name, line, wantIn string }{
+		{
+			"content as a string",
+			`{"type":"attachment","uuid":"p1","attachment":{"type":"task_reminder","content":"1. ship it"}}`,
+			"ship it",
+		},
+		{
+			"content as an array of strings",
+			`{"type":"attachment","uuid":"p2","attachment":{"type":"hook_additional_context",
+			  "hookName":"SessionStart","content":["You have superpowers.","And a second line."]}}`,
+			"superpowers",
+		},
+		{
+			"content as an array of blocks",
+			`{"type":"attachment","uuid":"p3","attachment":{"type":"hook_additional_context",
+			  "content":[{"type":"text","text":"block form"}]}}`,
+			"block form",
+		},
+		{
+			"content as an object",
+			`{"type":"attachment","uuid":"p4","attachment":{"type":"file","filename":"a.go",
+			  "content":{"type":"text","file":{"filePath":"a.go","content":"package main"}}}}`,
+			"package main",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			parts := projectLine(t, c.line)
+			if len(parts) != 1 {
+				t.Fatalf("got %d parts, want 1 — one field's shape discarded the whole line: %+v",
+					len(parts), parts)
+			}
+			if !strings.Contains(parts[0].Text, c.wantIn) {
+				t.Errorf("excerpt = %q, want it to contain %q", parts[0].Text, c.wantIn)
+			}
+		})
+	}
+}
+
+// An empty array is a reminder with nothing in it — 77 of those in one
+// session — and must not become 77 empty rows.
+func TestProjectClaude_EmptyPolymorphicContentIsNotAnInjection(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"attachment","uuid":"p5","attachment":{"type":"task_reminder","content":[]}}`,
+		`{"type":"attachment","uuid":"p6","attachment":{"type":"task_reminder","content":"[]"}}`,
+		`{"type":"attachment","uuid":"p7","attachment":{"type":"x","content":{}}}`,
+	} {
+		if parts := projectLine(t, line); len(parts) != 0 {
+			t.Errorf("%s projected %+v", line, parts)
+		}
+	}
+}
+
+// The same tolerance has to hold on the conversation path, where a
+// surprising scalar would cost a real turn rather than an injection.
+func TestProjectClaude_ASurprisingScalarDoesNotDiscardTheTurn(t *testing.T) {
+	// isMeta as a string rather than a bool: invented, but exactly the kind
+	// of drift that happens to someone else's format between releases.
+	parts := projectLine(t, `{
+	  "type":"assistant","uuid":"p8","isMeta":"false","timestamp":"2026-08-17T10:00:00.000Z",
+	  "message":{"role":"assistant","model":"claude-opus-5",
+	    "content":[{"type":"text","text":"the answer survived"}]}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts, want 1 — one unexpected scalar cost us a whole turn: %+v", len(parts), parts)
+	}
+	if parts[0].Text != "the answer survived" {
+		t.Errorf("text = %q", parts[0].Text)
 	}
 }

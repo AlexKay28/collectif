@@ -580,3 +580,40 @@ html, body {
 #nb-fidelity .what { font: 12.5px/1.6 var(--nb-serif); color: var(--nb-dim); }
 #nb-fidelity .what b { color: var(--nb-ink); font-weight: 400; }
 #nb-fidelity .can { font: 11.5px/1.6 var(--nb-serif); color: var(--nb-muted); margin-top: 3px; }
+
+/* ── Context injections ──────────────────────────────────────────────
+   What the harness put in front of the model that nobody typed. Recorded
+   because an injection you cannot see is often the whole explanation for
+   a surprising turn; collapsed because a turn can carry thirty of them
+   and the document is a conversation, not a context dump. The quietest
+   thing on the page until you go looking for it. */
+.out.inj {
+  border-left-color: var(--nb-rule-soft);
+  padding: 0 0 0 13px; margin-top: 8px;
+}
+.out.inj > summary {
+  cursor: pointer; list-style: none;
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  padding: 2px 0; letter-spacing: .02em;
+}
+.out.inj > summary::-webkit-details-marker { display: none; }
+.out.inj > summary::before { content: "▸ "; }
+.out.inj[open] > summary::before { content: "▾ "; }
+.out.inj > summary:hover { color: var(--nb-dim); }
+.out.inj .inj-total { color: var(--nb-rule); margin-left: 8px; }
+.out.inj > summary:hover .inj-total { color: var(--nb-muted); }
+
+.inj-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 0 12px;
+  padding: 6px 0; border-top: 1px solid var(--nb-rule-soft);
+}
+.inj-label { font: 11px var(--nb-mono); color: var(--nb-dim); }
+.inj-size {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  font-variant-numeric: tabular-nums;
+}
+.inj-body {
+  grid-column: 1 / -1; margin-top: 3px;
+  font: 11.5px/1.5 var(--nb-mono); color: var(--nb-muted);
+  white-space: pre-wrap; word-break: break-word;
+}

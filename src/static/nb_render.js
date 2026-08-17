@@ -132,12 +132,58 @@ export function renderOutputs(cell, liveText) {
     const d = o.data || {};
     if (o.type === "approval" && d.resolution) verdicts.set(d.approvalId, d.resolution);
   }
-  return outs
-    .filter((o) => !(o.type === "approval" && (o.data || {}).resolution))
-    .map((o) => (o.type === "approval"
-      ? renderApproval(o, verdicts.get((o.data || {}).approvalId))
-      : renderOutput(o)))
-    .join("");
+  // Consecutive injections collapse into one disclosure. A turn can carry
+  // thirty of them, and thirty separate lines would be worse than hiding
+  // them entirely — the reason they are recorded is that they are findable
+  // when something surprising happened, not that they are worth reading.
+  const parts = [];
+  let run = [];
+  const flush = () => {
+    if (run.length) { parts.push(renderInjections(run)); run = []; }
+  };
+  for (const o of outs) {
+    if (o.type === "injection") { run.push(o); continue; }
+    flush();
+    if (o.type === "approval") {
+      const d = o.data || {};
+      if (d.resolution) continue; // folded into its question above
+      parts.push(renderApproval(o, verdicts.get(d.approvalId)));
+      continue;
+    }
+    parts.push(renderOutput(o));
+  }
+  flush();
+  return parts.join("");
+}
+
+// Context the harness put in front of the model that nobody typed: skill
+// bodies, hook output, system reminders. Closed, it is one quiet line —
+// the turn did not "begin with your prompt" and the document should not
+// imply it did. Open, it is the list, with sizes, because the size is
+// usually the surprising part.
+function renderInjections(outs) {
+  const total = outs.reduce((n, o) => n + ((o.data || {}).size || 0), 0);
+  const rows = outs.map((o) => {
+    const d = o.data || {};
+    return `<div class="inj-row">
+              <span class="inj-label">${escapeHTML(String(d.label || "context"))}</span>
+              <span class="inj-size">${fmtBytes(d.size || 0)}</span>
+              <div class="inj-body">${escapeHTML(o.text || "")}</div>
+            </div>`;
+  }).join("");
+  const n = outs.length;
+  return `<details class="out inj">
+            <summary>${n} context injection${n === 1 ? "" : "s"}
+              <span class="inj-total">${fmtBytes(total)} the model read that nobody typed</span>
+            </summary>
+            ${rows}
+          </details>`;
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
 }
 
 // An approval is the one block in a document where the reader has to

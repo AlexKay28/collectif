@@ -186,6 +186,22 @@ func (p *sessionProjector) apply(part TranscriptPart) bool {
 		p.settleCurrent(CellInterrupted)
 		return true
 
+	case PartInjection:
+		// Context the model read that nobody typed. It belongs to the turn
+		// it entered, does not change that turn's state, and is recorded as
+		// label and size rather than body — the transcript on disk is the
+		// archive, and duplicating every injection would make a notebook
+		// cost the size of everything ever put in front of the model.
+		return p.appendOutput(part, Output{
+			Type: OutputInjection,
+			Text: part.Text,
+			Data: map[string]any{
+				"sourceUuid": part.UUID,
+				"label":      part.Label,
+				"size":       part.Size,
+			},
+		})
+
 	case PartAssistantText:
 		return p.appendOutput(part, Output{
 			Type: OutputText, Text: part.Text,
