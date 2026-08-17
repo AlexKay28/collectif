@@ -125,6 +125,10 @@ function fmtDuration(ns) {
 function wire() {
   root.querySelectorAll("[data-cell]").forEach((el) => {
     el.addEventListener("mousedown", () => {
+      // Re-rendering replaces innerHTML, which destroys the textarea the
+      // browser is about to place the caret in — so clicking inside the
+      // cell you are editing would reset the caret and break selection.
+      if (el.dataset.cell === state.selected) return;
       state.selected = el.dataset.cell;
       render();
     });
@@ -148,7 +152,7 @@ function wire() {
     }),
   );
   root.querySelectorAll("[data-add]").forEach((b) =>
-    b.addEventListener("click", () => insertCell(b.dataset.add, null)),
+    b.addEventListener("click", () => insertCell(b.dataset.add, {})),
   );
 
   const ta = root.querySelector("textarea.nb-src");
@@ -179,9 +183,17 @@ function selectedIndex() {
   return (state.notebook?.cells || []).findIndex((c) => c.id === state.selected);
 }
 
-async function insertCell(type, afterCellId) {
+// pos is {beforeCellId} or {afterCellId}. "Above" cannot be expressed with
+// afterCellId alone — empty means append, so inserting above the first cell
+// used to drop the new cell at the bottom of the notebook.
+async function insertCell(type, pos = {}) {
   try {
-    const res = await nbAPI.addCell(state.id, { type, source: "", afterCellId: afterCellId || "" });
+    const res = await nbAPI.addCell(state.id, {
+      type,
+      source: "",
+      afterCellId: pos.afterCellId || "",
+      beforeCellId: pos.beforeCellId || "",
+    });
     state.selected = res.cellId;
     state.mode = "edit";
   } catch (err) {
@@ -192,10 +204,14 @@ async function insertCell(type, afterCellId) {
 async function deleteCell(id) {
   const cells = state.notebook?.cells || [];
   const i = cells.findIndex((c) => c.id === id);
+  // Resolve the neighbour *before* awaiting. The server broadcasts inside
+  // Append, before it writes the HTTP response, so the cell_deleted event
+  // usually lands first and splices this very array — reading it afterwards
+  // would skip a cell, nondeterministically.
+  const nextID = (cells[i + 1] || cells[i - 1] || {}).id || null;
   try {
     await nbAPI.deleteCell(state.id, id);
-    const next = cells[i + 1] || cells[i - 1];
-    state.selected = next ? next.id : null;
+    state.selected = nextID;
   } catch (err) {
     showError(err);
   }
@@ -244,6 +260,11 @@ function onKeyDown(e) {
   const tag = document.activeElement?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
+  // Jupyter binds the unmodified keys only. Without this, Cmd/Ctrl+A
+  // inserts a cell instead of selecting all, Cmd/Ctrl+D arms dd, and
+  // Cmd+J/Cmd+K are swallowed as navigation.
+  if (e.altKey || e.metaKey || (e.ctrlKey && e.key !== "Enter")) return;
+
   const cells = state.notebook.cells || [];
   const i = selectedIndex();
 
@@ -275,10 +296,10 @@ function onKeyDown(e) {
       if (i > 0) state.selected = cells[i - 1].id;
       return handled();
     case "a":
-      insertCell("shell", i > 0 ? cells[i - 1].id : null);
+      insertCell("shell", state.selected ? { beforeCellId: state.selected } : {});
       return handled();
     case "b":
-      insertCell("shell", state.selected);
+      insertCell("shell", state.selected ? { afterCellId: state.selected } : {});
       return handled();
     case "m":
       if (state.selected) setType(state.selected, "markdown");
@@ -310,9 +331,12 @@ async function setType(id, type) {
   const i = cells.findIndex((c) => c.id === id);
   if (i < 0 || cells[i].type === type) return;
   const source = cells[i].source;
-  const after = i > 0 ? cells[i - 1].id : "";
   try {
-    const res = await nbAPI.addCell(state.id, { type, source, afterCellId: after });
+    // Insert in front of the cell being replaced, so the replacement lands
+    // exactly where the original was. Anchoring to the previous cell sent
+    // the first cell of a notebook to the bottom — movement the user never
+    // asked for, and not undoable.
+    const res = await nbAPI.addCell(state.id, { type, source, beforeCellId: id });
     await nbAPI.deleteCell(state.id, id);
     state.selected = res.cellId;
   } catch (err) {

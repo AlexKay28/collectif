@@ -161,6 +161,12 @@ type cellInsertedPayload struct {
 	// appends to the end; an id we cannot find also appends, so a racing
 	// delete degrades to "at the end" rather than losing the cell.
 	AfterCellID string `json:"afterCellId,omitempty"`
+	// BeforeCellID places the new cell directly in front of that cell, and
+	// takes precedence over AfterCellID. It exists because "after" alone
+	// cannot express the top of the notebook: empty means append, so
+	// inserting above the first cell used to drop the new cell at the
+	// bottom instead.
+	BeforeCellID string `json:"beforeCellId,omitempty"`
 }
 
 // cellEditedPayload uses pointers so "not supplied" and "set to empty" stay
@@ -254,7 +260,11 @@ func applyEvent(nb *Notebook, e Event) error {
 			c.State = CellIdle
 		}
 		at := len(nb.Cells)
-		if p.AfterCellID != "" {
+		if p.BeforeCellID != "" {
+			if i := indexOfCell(nb, p.BeforeCellID); i >= 0 {
+				at = i
+			}
+		} else if p.AfterCellID != "" {
 			if i := indexOfCell(nb, p.AfterCellID); i >= 0 {
 				at = i + 1
 			}

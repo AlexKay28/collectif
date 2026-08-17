@@ -19,7 +19,6 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -193,9 +192,20 @@ func runShellCell(ctx context.Context, st *notebookStore, cellID, source, root s
 	done := make(chan struct{})
 	go func() {
 		select {
-		case <-ctx.Done():
-			killProcessGroup(cmd)
 		case <-done:
+			// Finished normally. Check done first and return without
+			// looking at ctx: runShellCell cancels the context on the way
+			// out, so both cases are ready at once on the happy path and a
+			// random pick would kill a pid Wait() has already reaped —
+			// which, once pids recycle, is someone else's process group.
+			return
+		case <-ctx.Done():
+			select {
+			case <-done: // raced us to the exit; nothing to kill
+				return
+			default:
+			}
+			killProcessGroup(cmd)
 		}
 	}()
 
@@ -240,6 +250,12 @@ func (st *notebookStore) finishRun(cellID, runID, text string, status CellState)
 			log.Printf("notebook %s: append output for cell %s: %v", st.slug, cellID, err)
 		}
 	}
+	// Clear the live buffer between the two events, never before or after
+	// both. A fold taken in this window has the finalised output and no
+	// live copy, which renders correctly; clearing later would leave a
+	// window where a client could hold two copies of the same output.
+	st.clearLive(cellID, runID)
+
 	if _, err := st.Append(evRunFinished, runFinishedPayload{
 		CellID: cellID, RunID: runID, Status: status,
 	}); err != nil {
@@ -249,18 +265,20 @@ func (st *notebookStore) finishRun(cellID, runID, text string, status CellState)
 
 // ─── Output plumbing ────────────────────────────────────────────────────
 
-// deltaWriter fans process output to watchers as it arrives while
-// accumulating the finalised copy. Stdout and stderr share one writer so
-// interleaving is preserved the way a terminal would show it, which means
-// Write is called concurrently and has to be safe.
+// deltaWriter fans process output to watchers as it arrives while the store
+// accumulates the copy that becomes the finalised output. Stdout and stderr
+// share one writer so interleaving is preserved the way a terminal would
+// show it, which means Write is called concurrently — the store's own lock
+// is what makes that safe.
+//
+// The accumulation lives on the store rather than here so a client that
+// connects mid-run can be handed it in the opening fold. Deltas are not
+// persisted, so without that a refreshed page would show a running cell
+// with nothing in it.
 type deltaWriter struct {
 	st     *notebookStore
 	cellID string
 	runID  string
-
-	mu        sync.Mutex
-	buf       strings.Builder
-	truncated bool
 }
 
 func (d *deltaWriter) Write(p []byte) (int, error) {
@@ -269,22 +287,13 @@ func (d *deltaWriter) Write(p []byte) (int, error) {
 }
 
 func (d *deltaWriter) write(s string) {
-	d.mu.Lock()
-	if d.buf.Len() < maxCellOutput {
-		if room := maxCellOutput - d.buf.Len(); len(s) > room {
-			d.buf.WriteString(s[:room])
-			d.buf.WriteString("\n… output truncated at 256 KiB …\n")
-			d.truncated = true
-		} else {
-			d.buf.WriteString(s)
-		}
+	// Stop broadcasting when the store stops accepting: past the cap the
+	// text is going nowhere, and pushing it anyway floods every subscriber.
+	if d.st.appendLive(d.cellID, d.runID, s) {
+		d.st.broadcastDelta(d.cellID, d.runID, s)
 	}
-	d.mu.Unlock()
-	d.st.broadcastDelta(d.cellID, d.runID, s)
 }
 
 func (d *deltaWriter) text() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.buf.String()
+	return d.st.liveText(d.cellID, d.runID)
 }

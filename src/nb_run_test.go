@@ -78,6 +78,20 @@ func (f *nbFixture) stateOf(cellID string) CellState {
 	return ""
 }
 
+// dialWSRaw opens a websocket without consuming anything, so a caller can
+// inspect the opening fold itself.
+func (f *nbFixture) dialWSRaw(t *testing.T) (*websocket.Conn, func()) {
+	t.Helper()
+	hs := httptest.NewServer(f.srv.Router())
+	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws/notebook/" + f.st.slug + "?token=test-token"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		hs.Close()
+		t.Fatalf("dial: %v", err)
+	}
+	return conn, func() { conn.Close(); hs.Close() }
+}
+
 // dialWS opens a websocket onto this notebook and consumes the opening
 // fold, leaving the connection positioned on live traffic.
 func (f *nbFixture) dialWS(t *testing.T) (*websocket.Conn, func()) {
