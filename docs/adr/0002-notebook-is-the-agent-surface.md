@@ -310,6 +310,55 @@ carry the id of the last event they folded, and one that cannot be matched
 against the log is discarded rather than believed. Re-folding a log is cheap;
 serving a wrong document is not.
 
+### Filtered out is not thrown away
+
+The projector's filters make a session readable by keeping the machinery out
+of the conversation. P0 treated that as a reason to *discard* it. That was
+wrong, and reading the DeepSeek harness's account of its own session log —
+"everything the model sees is recorded … and every context injection" — is
+what made it obvious.
+
+An injection you cannot see is often the whole explanation for a surprising
+turn. A real session's first cell is not the prompt: it is 900 KB of skill
+listings, hook output and a `<EXTREMELY_IMPORTANT>` preamble, and a document
+that opens with the prompt is claiming something untrue about how the turn
+began.
+
+So injections are now recorded as their own part kind — hidden by default,
+present in the record, folded by the renderer into one line per run ("12
+context injections, 340 KB the model read that nobody typed"). What is stored
+is the fact, the label and the size, plus a 240-byte excerpt; never the body.
+The CLI's transcript is the archive and this is a view over it, so duplicating
+every injection would make the notebook cost the size of everything ever put
+in front of the model. Measured on a real 3,626-line session: 62 injections,
+0.99 MB of context made visible, for 2% growth in the log.
+
+One type is excluded and it earns the exception with a number: that session
+carried 671 copies of `<total_tokens>N tokens left</total_tokens>`, one per
+turn. Recording them would bury the preamble that matters, and a list nobody
+can find anything in fails the same way as recording nothing. The exclusion
+list is one entry long on purpose — a blocklist that grows by guesswork drifts
+back into hiding things.
+
+We did not take their plugin architecture. "Everything is a plugin" on a
+kernel is the opposite of §8's non-goal, and MCP is already the extension
+story.
+
+### A field's shape must not cost the line
+
+Building the above found a bug that had been silently eating data since P0.
+`attachment.content` is polymorphic in the real format — a string for a hook,
+an array for injected context, an object for a file reference — and it had
+been declared as a string. `json.Unmarshal` therefore failed on the *whole
+line*, so 79 injections vanished with no error and no log entry, including the
+preamble that shaped every turn beneath it.
+
+This is P0's lesson one level down. There the risk was misreading a field; here
+it is that one surprising field discards everything around it. Payload fields
+are now read raw and flattened by shape, and the boolean flags are read
+through a tolerant helper, so a type that drifts between Claude Code releases
+costs us that field rather than the turn.
+
 ### One more thing collectif was doing to itself
 
 `cmd.Env = append(os.Environ(), …)` passed collectif's whole environment to

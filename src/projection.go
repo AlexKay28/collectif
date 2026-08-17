@@ -51,7 +51,26 @@ const (
 	// PartInterrupted marks the user stopping a turn. It is a state change
 	// on the turn that was running, not a turn of its own.
 	PartInterrupted PartKind = "interrupted"
+
+	// PartInjection is context the harness put into the model's window that
+	// nobody typed: skill bodies, hook output, system reminders, background
+	// task notifications.
+	//
+	// These are filtered out of the conversation for good reason — a real
+	// session carries thousands of them and they would bury the sentences a
+	// person actually wrote. But filtered out is not thrown away. An
+	// injection you cannot see is often the whole explanation for why an
+	// agent did something surprising, and a record that omits them claims
+	// the turn began with your prompt when it did not.
+	PartInjection PartKind = "injection"
 )
+
+// injectionExcerptMax bounds what one injection contributes to the log. A
+// single background-task notification runs to 47 KB; recording bodies would
+// make the notebook cost the size of everything ever injected. The size is
+// recorded in full, the body is not — the transcript on disk is the
+// archive, and this is a view over it.
+const injectionExcerptMax = 240
 
 // claudeInterruptMarkers are the literal strings Claude Code writes to the
 // transcript when a turn is stopped. They arrive as role:"user" with no
@@ -124,6 +143,15 @@ type TranscriptPart struct {
 	// At is the CLI's timestamp, or the zero time if it was unparseable.
 	// A bad timestamp never costs us the turn.
 	At time.Time
+
+	// Label names an injection: which hook, which tool, what kind of
+	// reminder. It is what makes a list of thirty of them skimmable.
+	Label string
+
+	// Size is the injection's full length in bytes, of which Text holds at
+	// most injectionExcerptMax. The reader has to be able to tell a
+	// one-line reminder from a forty-kilobyte document.
+	Size int
 }
 
 // ─── Claude Code ────────────────────────────────────────────────────────
@@ -134,20 +162,26 @@ type TranscriptPart struct {
 // field named here is a compatibility commitment, so the list stays as
 // short as the feature allows.
 type claudeLine struct {
-	Type       string `json:"type"`
-	UUID       string `json:"uuid"`
-	ParentUUID string `json:"parentUuid"`
-	Timestamp  string `json:"timestamp"`
-	Sidechain  bool   `json:"isSidechain"`
+	Type       string          `json:"type"`
+	UUID       string          `json:"uuid"`
+	ParentUUID string          `json:"parentUuid"`
+	Timestamp  string          `json:"timestamp"`
+	Sidechain  json.RawMessage `json:"isSidechain"`
 
+	// The flag fields are raw for the same reason the payload fields are:
+	// a bool that arrives as a string would otherwise fail the whole line's
+	// decode and cost us a real turn. They are read through jsonBool, which
+	// treats anything it cannot understand as false — the same direction
+	// the filters already fail in.
+	//
 	// IsMeta marks a line Claude Code wrote *in the user's voice* that the
 	// user never typed: command caveats, injected skill bodies, system
 	// reminders. SourceToolUseID marks one a tool injected. Both are
 	// role:"user" on the wire and neither is a prompt — without this
 	// filter a session's document buries the three sentences a person
 	// wrote under several thousand lines of machinery.
-	IsMeta          bool   `json:"isMeta"`
-	SourceToolUseID string `json:"sourceToolUseID"`
+	IsMeta          json.RawMessage `json:"isMeta"`
+	SourceToolUseID string          `json:"sourceToolUseID"`
 
 	// Origin is the explicit provenance mark, and the one that matters
 	// most. isMeta does not cover machine-authored user turns: background
@@ -159,9 +193,74 @@ type claudeLine struct {
 	// IsCompactSummary marks the summary written when the CLI compacts its
 	// own context. Compaction appends rather than rewriting, so this is a
 	// turn like any other — just not one the user typed.
-	IsCompactSummary bool `json:"isCompactSummary"`
+	IsCompactSummary json.RawMessage `json:"isCompactSummary"`
 
-	Message *claudeMessage `json:"message"`
+	Message    *claudeMessage    `json:"message"`
+	Attachment *claudeAttachment `json:"attachment"`
+}
+
+// claudeAttachment is hook output and other harness-authored context. It
+// arrives on its own line type rather than as a message.
+type claudeAttachment struct {
+	Type     string `json:"type"`
+	HookName string `json:"hookName"`
+	Filename string `json:"filename"`
+
+	// The payload arrives under a different key per type, so all of them
+	// are read and the first non-empty one wins. Surveyed against a real
+	// session: `content` (hooks, skill listings, the todo list), `stdout`
+	// (hook output), `snippet` (a file just edited), `prompt` (a queued
+	// command), `text` (reminders).
+	//
+	// They are raw because `content` is polymorphic — a string for a hook,
+	// an array for injected context, an object for a file reference — and
+	// declaring it as a string made json.Unmarshal fail on the *entire
+	// line*. 79 injections vanished that way, including the preamble that
+	// shaped every turn beneath it. A field whose type surprises us must
+	// cost us that field, never the line.
+	Content json.RawMessage `json:"content"`
+	Stdout  json.RawMessage `json:"stdout"`
+	Snippet json.RawMessage `json:"snippet"`
+	Prompt  json.RawMessage `json:"prompt"`
+	Text    json.RawMessage `json:"text"`
+}
+
+// bookkeepingAttachments are attachment types that carry no context, only
+// the harness telling the model about itself.
+//
+// Exactly one entry, and it earns its place with a number: a single
+// 3,548-line session carried 671 copies of
+// `<total_tokens>N tokens left</total_tokens>`, one per turn. Recording
+// them would bury the skill body and the hook instructions that actually
+// explain what an agent did — and a list nobody can find anything in fails
+// for the same reason as recording nothing at all.
+//
+// The list stays this short on purpose. A blocklist that grows by
+// guesswork drifts back into hiding things, which is what #47 set out to
+// stop.
+var bookkeepingAttachments = map[string]bool{
+	"total_tokens_reminder": true,
+}
+
+// payload returns the attachment's content and a label for it.
+func (a claudeAttachment) payload() (body, label string) {
+	for _, candidate := range []json.RawMessage{a.Content, a.Stdout, a.Snippet, a.Prompt, a.Text} {
+		if flat := flattenJSONText(candidate); strings.TrimSpace(flat) != "" {
+			body = flat
+			break
+		}
+	}
+	switch {
+	case a.HookName != "":
+		label = "hook: " + a.HookName
+	case a.Filename != "":
+		label = "edited: " + a.Filename
+	case a.Type != "":
+		label = strings.ReplaceAll(a.Type, "_", " ")
+	default:
+		label = "context"
+	}
+	return body, label
 }
 
 type claudeOrigin struct {
@@ -174,7 +273,7 @@ type claudeOrigin struct {
 // injection format Claude Code invents silently becomes the loudest thing
 // in every document, which is how the 47 KB "prompt" got in.
 func (l claudeLine) typedByAHuman() bool {
-	if l.IsMeta || l.SourceToolUseID != "" || l.IsCompactSummary {
+	if jsonBool(l.IsMeta) || l.SourceToolUseID != "" || jsonBool(l.IsCompactSummary) {
 		return false
 	}
 	if l.Origin != nil {
@@ -216,13 +315,27 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 	if err := json.Unmarshal(raw, &line); err != nil {
 		return nil, nil // a partial write, or a shape we do not know
 	}
+
+	// An attachment is hook output: context the model read that nobody
+	// typed. Recorded rather than dropped (see PartInjection).
+	if line.Type == "attachment" && line.Attachment != nil {
+		if bookkeepingAttachments[line.Attachment.Type] {
+			return nil, nil
+		}
+		body, label := line.Attachment.payload()
+		if strings.TrimSpace(body) == "" {
+			return nil, nil
+		}
+		return []TranscriptPart{injectionPart(line, label, body)}, nil
+	}
+
 	if line.Message == nil || len(line.Message.Content) == 0 {
 		return nil, nil
 	}
 
-	// Types other than user/assistant are session machinery: hook output
-	// (`attachment`), turn bookkeeping (`system`), editor state
-	// (`file-history-*`), queue operations, titles.
+	// Everything else that is neither user nor assistant is bookkeeping —
+	// turn durations, editor state, queue operations, titles. It was never
+	// in the model's context, and recording it would bury what was.
 	switch line.Type {
 	case "user", "assistant":
 	default:
@@ -230,7 +343,7 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 	}
 
 	base := TranscriptPart{
-		Sidechain:  line.Sidechain,
+		Sidechain:  jsonBool(line.Sidechain),
 		Model:      line.Message.Model,
 		UUID:       line.UUID,
 		ParentUUID: line.ParentUUID,
@@ -248,12 +361,12 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 		case isClaudeInterrupt(s):
 			base.Kind = PartInterrupted
 			return []TranscriptPart{base}, nil
-		case line.IsCompactSummary:
+		case jsonBool(line.IsCompactSummary):
 			base.Kind = PartCompactSummary
 		case line.typedByAHuman():
 			base.Kind = PartUserText
 		default:
-			return nil, nil
+			return []TranscriptPart{injectionPart(line, line.injectionLabel(s), s)}, nil
 		}
 		base.Text = s
 		return []TranscriptPart{base}, nil
@@ -278,11 +391,14 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 					p.Text = ""
 					out = append(out, p)
 					continue
-				case line.IsCompactSummary:
+				case jsonBool(line.IsCompactSummary):
 					p.Kind = PartCompactSummary
 				case line.typedByAHuman():
 					p.Kind = PartUserText
 				default:
+					if strings.TrimSpace(b.Text) != "" {
+						out = append(out, injectionPart(line, line.injectionLabel(b.Text), b.Text))
+					}
 					continue
 				}
 			} else {
@@ -355,6 +471,138 @@ func flattenClaudeResult(raw json.RawMessage) string {
 		b.WriteString(blk.Text)
 	}
 	return b.String()
+}
+
+// flattenJSONText pulls readable text out of a value whose shape we do not
+// control: a string, an array of strings or blocks, or an object with text
+// somewhere inside it. Anything it cannot read becomes empty rather than an
+// error, because the alternative — refusing the line — is how 79
+// injections went missing.
+//
+// Depth-bounded: these are other people's structures and a pathological
+// one must not cost us a stack.
+func flattenJSONText(raw json.RawMessage) string {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	var b strings.Builder
+	collectJSONText(v, &b, 0)
+	out := strings.TrimSpace(b.String())
+	// "[]" is an empty todo list rendered as text — 77 of them in one
+	// session. An injection with nothing in it is not an injection.
+	if out == "[]" || out == "{}" {
+		return ""
+	}
+	return out
+}
+
+const jsonTextMaxDepth = 6
+
+func collectJSONText(v any, b *strings.Builder, depth int) {
+	if depth > jsonTextMaxDepth || b.Len() > 4*injectionExcerptMax {
+		return
+	}
+	switch t := v.(type) {
+	case string:
+		if strings.TrimSpace(t) == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(t)
+	case []any:
+		for _, item := range t {
+			collectJSONText(item, b, depth+1)
+		}
+	case map[string]any:
+		// Named first so a block reads as its text rather than as its
+		// metadata; then everything else, so an unfamiliar shape still
+		// yields whatever strings it holds.
+		for _, key := range []string{"text", "content", "snippet", "prompt"} {
+			if inner, ok := t[key]; ok {
+				collectJSONText(inner, b, depth+1)
+			}
+		}
+		for key, inner := range t {
+			switch key {
+			case "text", "content", "snippet", "prompt", "type", "filePath", "filename":
+				continue
+			}
+			collectJSONText(inner, b, depth+1)
+		}
+	}
+}
+
+// injectionPart builds the bounded record of one injection.
+func injectionPart(line claudeLine, label, body string) TranscriptPart {
+	return TranscriptPart{
+		Kind:       PartInjection,
+		Label:      label,
+		Text:       injectionExcerpt(body),
+		Size:       len(body),
+		Sidechain:  jsonBool(line.Sidechain),
+		UUID:       line.UUID,
+		ParentUUID: line.ParentUUID,
+		At:         parseClaudeTime(line.Timestamp),
+	}
+}
+
+// jsonBool reads a flag that ought to be a bool but might not be. Anything
+// unreadable is false, which is the direction the filters already fail in:
+// an unrecognised line is machinery until proven otherwise, and a flag we
+// cannot parse is not proof.
+func jsonBool(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var b bool
+	if json.Unmarshal(raw, &b) == nil {
+		return b
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s == "true" || s == "1"
+	}
+	return false
+}
+
+// injectionExcerpt keeps the *start* of an injection rather than eliding
+// its middle. For a tool result the middle matters; for an injection the
+// first line is what identifies it, and the rest is why it was excluded
+// from the conversation in the first place.
+func injectionExcerpt(body string) string {
+	body = strings.TrimSpace(body)
+	if len(body) <= injectionExcerptMax {
+		return body
+	}
+	cut := runeBoundaryBefore(body, injectionExcerptMax)
+	return body[:cut] + "…"
+}
+
+// injectionLabel names an injection from what the line says about itself,
+// falling back to the shape of the text. Labels are a convenience, not a
+// contract: a wrong one costs a reader a moment, where a wrong *filter*
+// would cost them the document.
+func (l claudeLine) injectionLabel(body string) string {
+	if l.Origin != nil && l.Origin.Kind != "" && l.Origin.Kind != "human" {
+		return strings.ReplaceAll(l.Origin.Kind, "-", " ")
+	}
+	trimmed := strings.TrimSpace(body)
+	switch {
+	case strings.HasPrefix(trimmed, "<local-command-caveat>"):
+		return "command caveat"
+	case strings.HasPrefix(trimmed, "<system-reminder>"):
+		return "system reminder"
+	case strings.HasPrefix(trimmed, "<command-name>"):
+		return "slash command"
+	case l.SourceToolUseID != "":
+		return "injected by a tool"
+	case jsonBool(l.IsMeta):
+		return "harness context"
+	}
+	return "context"
 }
 
 func parseClaudeTime(s string) time.Time {

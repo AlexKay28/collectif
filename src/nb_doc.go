@@ -67,6 +67,10 @@ const (
 	OutputError      OutputType = "error"
 	OutputSubagent   OutputType = "subagent"
 	OutputApproval   OutputType = "approval"
+	// OutputInjection is context the harness put into the model's window
+	// that nobody typed (#47). Recorded as fact, label and size rather than
+	// body — the CLI's own transcript is the archive.
+	OutputInjection OutputType = "injection"
 )
 
 // Output is one rendered block produced by a run. Only text and error are

@@ -373,3 +373,60 @@ func TestProjector_ConsecutivePromptsStillSettleOK(t *testing.T) {
 		t.Errorf("state = %q, want ok — an answered turn is not an abandoned branch", got)
 	}
 }
+
+// ─── Context injections ─────────────────────────────────────────────────
+
+func TestProjector_InjectionsLandOnTheTurnTheyEntered(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{part(PartUserText, "do the thing", "l1")})
+	p.Ingest([]TranscriptPart{{
+		Kind: PartInjection, Label: "hook: PreToolUse", Text: "reminder text",
+		Size: 4096, UUID: "l2",
+	}})
+	p.Ingest([]TranscriptPart{part(PartAssistantText, "done", "l3")})
+
+	cells := st.Doc().Cells
+	if len(cells) != 1 {
+		t.Fatalf("got %d cells, want 1 — an injection is not a turn: %+v", len(cells), cells)
+	}
+	outs := cells[0].Outputs
+	if len(outs) != 2 {
+		t.Fatalf("got %d outputs, want 2: %+v", len(outs), outs)
+	}
+	if outs[0].Type != OutputInjection {
+		t.Errorf("output 0 = %q, want injection", outs[0].Type)
+	}
+	if outs[0].Data["label"] != "hook: PreToolUse" {
+		t.Errorf("the label was lost: %v", outs[0].Data)
+	}
+	// The size is the point: it is what tells you a one-line reminder from
+	// a forty-kilobyte skill body you never saw.
+	if outs[0].Data["size"] != float64(4096) && outs[0].Data["size"] != 4096 {
+		t.Errorf("size = %v, want 4096", outs[0].Data["size"])
+	}
+	// And it must not disturb the turn.
+	if cells[0].State != CellRunning {
+		t.Errorf("state = %q — an injection changed the turn's state", cells[0].State)
+	}
+}
+
+// Injections arrive before the first prompt: session-start hooks run
+// before anyone has typed anything. They still belong in the record.
+func TestProjector_InjectionsBeforeAnyTurnAreKept(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{{Kind: PartInjection, Label: "hook: SessionStart", Text: "ctx", Size: 900, UUID: "l1"}})
+	p.Ingest([]TranscriptPart{part(PartUserText, "the first prompt", "l2")})
+
+	cells := st.Doc().Cells
+	if len(cells) != 2 {
+		t.Fatalf("got %d cells, want 2 (the startup context, then the prompt): %+v", len(cells), cells)
+	}
+	if len(cells[0].Outputs) != 1 || cells[0].Outputs[0].Type != OutputInjection {
+		t.Errorf("the startup context was dropped: %+v", cells[0].Outputs)
+	}
+	if cells[1].Source != "the first prompt" {
+		t.Errorf("the prompt landed wrong: %q", cells[1].Source)
+	}
+}
