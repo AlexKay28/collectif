@@ -147,6 +147,7 @@ html, body {
 }
 #nb-doc-head .title { font: 20px/1.2 var(--nb-serif); color: var(--nb-ink); }
 #nb-doc-head .root { font: 11px var(--nb-mono); color: var(--nb-muted); }
+#nb-doc-head .sp { flex: 1; }
 
 #nb-cells { max-width: 860px; padding: 0 30px 200px; }
 .nb-empty { color: var(--nb-muted); font-style: italic; padding: 30px; }
@@ -470,3 +471,34 @@ html, body {
 }
 .agent.session:hover .term, .agent.session .term:focus-visible { opacity: 1; }
 .agent.session .term:hover { color: var(--nb-ink); border-color: var(--nb-dim); }
+
+/* A live session's header. The dot is the only moving thing on the page,
+   which is the right amount of emphasis for "this is connected to a
+   process that is running right now". */
+#nb-doc-head .live {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: 11px var(--nb-mono); color: var(--nb-run);
+}
+#nb-doc-head .live .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--nb-run);
+  animation: nb-pulse 2s ease-in-out infinite;
+}
+@keyframes nb-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+@media (prefers-reduced-motion: reduce) {
+  #nb-doc-head .live .dot { animation: none; }
+}
+#nb-doc-head .live.ended { color: var(--nb-muted); }
+#nb-doc-head .live.ended .dot { background: var(--nb-muted); animation: none; }
+#nb-doc-head .live button {
+  background: none; border: 1px solid var(--nb-rule); border-radius: 3px;
+  color: var(--nb-muted); font: 10.5px var(--nb-mono); cursor: pointer; padding: 2px 7px;
+}
+#nb-doc-head .live button:hover { color: var(--nb-ink); border-color: var(--nb-dim); }
+
+/* In a live notebook the prompt is the primary action, so it reads as one
+   — but quietly. A filled accent button here would be the loudest thing on
+   a page whose only colour is meant to be state. */
+.nb-add-row.live .primary {
+  color: var(--nb-ink); border-color: var(--nb-dim);
+}
+.nb-add-row.live .primary:hover { background: rgba(236,232,227,.06); }

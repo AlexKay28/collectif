@@ -113,7 +113,7 @@ func (a *codexAdapter) Spawn(req SpawnRequest) (*exec.Cmd, func(), error) {
 	cmd.Dir = req.Cwd
 	// CODEX_HOME points at our scratch dir; auth still uses the real home
 	// via the codex login flow — advanced users can override with a link.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(inheritableEnv(),
 		"TERM=xterm-256color",
 		"AGENTCTL_AGENT_ID="+req.AgentID,
 		"CODEX_HOME="+codexHome,
