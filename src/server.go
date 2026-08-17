@@ -63,6 +63,9 @@ func (srv *Server) Router() http.Handler {
 	// #44 local GitHub issue/PR mirror. Read-only endpoints under /api/gh/*;
 	// the syncer shells out to the host `gh` CLI.
 	registerGHRoutes(mux)
+	// #49 notebooks — /api/nb/* for mutations, /ws/notebook/<id> for the
+	// event stream. Both inherit the auth gate below.
+	registerNotebookRoutes(mux)
 	return srv.withAuth(mux)
 }
 

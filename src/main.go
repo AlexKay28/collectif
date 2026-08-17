@@ -72,6 +72,10 @@ func main() {
 		<-stop
 		log.Printf("shutdown: terminating sessions")
 		shutdownAllSessions(3 * time.Second)
+		// #49 flush each open notebook's snapshot and release its log
+		// handle. The log is already durable — every event was written as
+		// it happened — so this only saves the next open a re-fold.
+		closeAllNotebooks()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
