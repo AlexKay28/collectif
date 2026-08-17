@@ -60,11 +60,16 @@ func handleNotebookWS(w http.ResponseWriter, r *http.Request) {
 	// the fold. That is why events carry a sequence number: the fold states
 	// the position it was taken at, and the client applies only events with
 	// a greater one. Ordering stops mattering.
+	// The fold carries the live buffers too. Deltas are never persisted, so
+	// a client joining mid-run would otherwise see a running cell with
+	// nothing in it until the run finished — which is exactly what a page
+	// refresh does.
 	doc := st.Doc()
 	if b, err := json.Marshal(map[string]any{
 		"type":     "fold",
 		"version":  doc.Version,
 		"notebook": doc,
+		"live":     st.liveSnapshot(),
 	}); err == nil {
 		sub.send(b)
 	}

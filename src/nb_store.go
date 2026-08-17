@@ -68,6 +68,20 @@ type notebookStore struct {
 	// command must never be able to block an append or a broadcast.
 	runsMu sync.Mutex
 	runs   map[string]*nbRun
+
+	// liveMu guards liveOut ONLY — what each running cell has produced so
+	// far, keyed by cell id. Deltas are never persisted, so without this a
+	// client that connects mid-run (a page refresh) would see a running
+	// cell with nothing in it until the run finished. Cleared the moment
+	// the finalised output reaches the log, which is then the record.
+	liveMu  sync.Mutex
+	liveOut map[string]*liveOutput
+}
+
+// liveOutput is the un-persisted, in-progress output of one run.
+type liveOutput struct {
+	RunID string `json:"runId"`
+	Text  string `json:"text"`
 }
 
 func (st *notebookStore) logPath() string  { return filepath.Join(st.dir, st.slug+".jsonl") }
@@ -342,6 +356,60 @@ func (st *notebookStore) broadcastDelta(cellID, runID, text string) {
 	st.sendAll(msg)
 }
 
+// ─── Live output ────────────────────────────────────────────────────────
+
+// appendLive accumulates a running cell's output, capped so a runaway
+// command costs a truncated cell rather than the process.
+func (st *notebookStore) appendLive(cellID, runID, text string) {
+	st.liveMu.Lock()
+	defer st.liveMu.Unlock()
+	if st.liveOut == nil {
+		st.liveOut = map[string]*liveOutput{}
+	}
+	cur, ok := st.liveOut[cellID]
+	if !ok || cur.RunID != runID {
+		cur = &liveOutput{RunID: runID}
+		st.liveOut[cellID] = cur
+	}
+	if len(cur.Text) >= maxCellOutput {
+		return
+	}
+	if room := maxCellOutput - len(cur.Text); len(text) > room {
+		cur.Text += text[:room] + "\n… output truncated at 256 KiB …\n"
+		return
+	}
+	cur.Text += text
+}
+
+func (st *notebookStore) liveText(cellID, runID string) string {
+	st.liveMu.Lock()
+	defer st.liveMu.Unlock()
+	if cur, ok := st.liveOut[cellID]; ok && cur.RunID == runID {
+		return cur.Text
+	}
+	return ""
+}
+
+func (st *notebookStore) clearLive(cellID, runID string) {
+	st.liveMu.Lock()
+	if cur, ok := st.liveOut[cellID]; ok && cur.RunID == runID {
+		delete(st.liveOut, cellID)
+	}
+	st.liveMu.Unlock()
+}
+
+// liveSnapshot is what the opening fold carries so a client joining
+// mid-run sees what has already been produced.
+func (st *notebookStore) liveSnapshot() map[string]liveOutput {
+	st.liveMu.Lock()
+	defer st.liveMu.Unlock()
+	out := make(map[string]liveOutput, len(st.liveOut))
+	for k, v := range st.liveOut {
+		out[k] = *v
+	}
+	return out
+}
+
 func (st *notebookStore) sendAll(msg []byte) {
 	st.subMu.Lock()
 	subs := make([]*wsSub, 0, len(st.subs))
@@ -544,9 +612,31 @@ type notebookSummary struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// listNotebooks enumerates the notebooks directory. Each one is folded to
-// read its title, which is fine at launcher scale; if that ever hurts, the
-// snapshot already holds the answer.
+// peekNotebook reads a notebook's summary without opening it.
+//
+// Listing must not go through acquireNotebook: that registers the store and
+// holds its log open, so rendering a launcher would pin every notebook on
+// disk for the life of the process. An already-open notebook is read from
+// the registry (authoritative and free); anything else is folded from a
+// read-only probe that owns no handle and joins no registry.
+func peekNotebook(dir, slug string) (notebookSummary, bool) {
+	nbRegistryMu.Lock()
+	st, open := nbRegistry[slug]
+	nbRegistryMu.Unlock()
+	if open && !st.isClosed() {
+		nb := st.Doc()
+		return notebookSummary{ID: slug, Title: nb.Title, Root: nb.Root, Cells: len(nb.Cells)}, true
+	}
+
+	probe := &notebookStore{dir: dir, slug: slug}
+	nb, err := probe.load() // snapshot + remaining events, same as a real open
+	if err != nil || nb == nil {
+		return notebookSummary{}, false
+	}
+	return notebookSummary{ID: slug, Title: nb.Title, Root: nb.Root, Cells: len(nb.Cells)}, true
+}
+
+// listNotebooks enumerates the notebooks directory.
 func listNotebooks() ([]notebookSummary, error) {
 	dir := nbDirFn()
 	entries, err := os.ReadDir(dir)
@@ -565,12 +655,10 @@ func listNotebooks() ([]notebookSummary, error) {
 		if !validNotebookSlug(slug) {
 			continue
 		}
-		st, err := acquireNotebook(slug)
-		if err != nil {
-			continue // unreadable notebook shouldn't blank the whole list
+		s, ok := peekNotebook(dir, slug)
+		if !ok {
+			continue // one unreadable notebook shouldn't blank the whole list
 		}
-		nb := st.Doc()
-		s := notebookSummary{ID: slug, Title: nb.Title, Root: nb.Root, Cells: len(nb.Cells)}
 		if info, err := e.Info(); err == nil {
 			s.UpdatedAt = info.ModTime().UTC()
 		}

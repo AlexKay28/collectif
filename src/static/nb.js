@@ -209,6 +209,13 @@ function connect() {
     if (msg.type === "fold") {
       state.notebook = msg.notebook;
       state.version = msg.version ?? msg.notebook.version ?? 0;
+      // Live buffers for cells that are mid-run. Without these a refresh
+      // during a long command shows a running cell with nothing in it,
+      // because deltas are never written to the log.
+      state.live.clear();
+      for (const [cellId, live] of Object.entries(msg.live || {})) {
+        state.live.set(cellId, live.text || "");
+      }
       emit();
       return;
     }

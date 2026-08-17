@@ -225,5 +225,10 @@ __marimo__/
 *.out
 /.claude/
 
-# collectif local state — attachments, GitHub cache (#44), etc.
+# collectif local state — attachments, GitHub cache (#44), notebooks (#49).
+#
+# Notebooks live here deliberately (ADR 0001 §9): in-repo so they can be
+# committed alongside the work they describe, gitignored by default so they
+# aren't committed by accident. Un-ignore a notebook to keep it:
+#   git add -f .collectif/notebooks/<name>.jsonl
 /.collectif/
