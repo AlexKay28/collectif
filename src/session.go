@@ -182,6 +182,13 @@ type Session struct {
 	transcriptOffset int64
 	watching         bool
 
+	// nb / projector render this session as a notebook (ADR 0002). Both
+	// are opened lazily by the transcript watcher — a session that never
+	// writes a transcript never gets a document — and guarded by s.mu
+	// like everything else on this struct.
+	nb        *notebookStore
+	projector *sessionProjector
+
 	// ctx / cancel stop the per-session background workers (menu detector,
 	// transcript watcher). Set once when the session is created.
 	ctx    context.Context
@@ -612,19 +619,24 @@ func (s *Session) toJSON() map[string]any {
 		toolTok = s.OutputTokens - thinkTok - textTok
 	}
 	return map[string]any{
-		"id":                  s.ID,
-		"sessionId":           s.SessionID,
-		"cli":                 cli,
-		"cwd":                 s.Cwd,
-		"prompt":              s.Prompt,
-		"status":              s.Status,
-		"lastActivity":        s.LastActivity,
-		"lastTool":            s.LastTool,
-		"currentTask":         s.CurrentTask,
-		"taskHistory":         history,
-		"toolCounts":          toolCounts,
-		"activity":            activity,
-		"transcriptPath":      s.TranscriptPath,
+		"id":             s.ID,
+		"sessionId":      s.SessionID,
+		"cli":            cli,
+		"cwd":            s.Cwd,
+		"prompt":         s.Prompt,
+		"status":         s.Status,
+		"lastActivity":   s.LastActivity,
+		"lastTool":       s.LastTool,
+		"currentTask":    s.CurrentTask,
+		"taskHistory":    history,
+		"toolCounts":     toolCounts,
+		"activity":       activity,
+		"transcriptPath": s.TranscriptPath,
+		// notebook is this session rendered as a document (ADR 0002).
+		// Empty until the transcript watcher opens one — an adapter with
+		// no transcript never gets a document, and a link to a notebook
+		// that does not exist is a 404 with extra steps.
+		"notebook":            notebookSlugOf(s.nb),
 		"pending":             pending,
 		"menuOptions":         append([]MenuOption(nil), s.MenuOptions...),
 		"askQuestion":         s.AskQuestion,

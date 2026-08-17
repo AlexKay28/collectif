@@ -275,3 +275,13 @@ func tomlQuote(s string) string {
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return `"` + s + `"`
 }
+
+// ProjectTranscriptLine has no implementation for codex yet: its rollout
+// files are a different schema, and ADR 0002 D11 says an adapter with
+// nothing to give says so rather than guessing. A codex session therefore
+// renders as status and counters with a note naming what is missing —
+// which is the honest view, and the one that makes adding the parser a
+// visible improvement rather than a silent one.
+func (a *codexAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, error) {
+	return nil, nil
+}

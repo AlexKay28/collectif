@@ -414,3 +414,59 @@ html, body {
 }
 .out.collapsed:hover { color: var(--nb-dim); }
 .nb-body.tall .out { max-height: none; }
+
+/* ── Mirrored cells (ADR 0002 D9) ────────────────────────────────────
+   A cell projected from a running CLI session. The design problem is
+   that it must read as *the same document* as your own cells while
+   being obviously not yours to edit — so the difference is carried by
+   the gutter and a left rule, not by a different colour scheme, a box,
+   or a badge. You should be able to skim a mixed notebook without your
+   eye being dragged to the provenance of every cell. */
+
+.nb-cell.mirrored .nb-type,
+.nb-cell.compact .nb-type { font-style: italic; color: var(--nb-muted); }
+
+.nb-cell.mirrored .nb-body { border-left: 1px solid var(--nb-rule-soft); padding-left: 14px; margin-left: -15px; }
+.nb-cell.mirrored:hover .nb-body { border-left-color: var(--nb-rule); }
+
+/* The prompt someone actually typed is the anchor of the turn: it gets
+   the weight, and everything under it is subordinate to it. */
+.nb-cell.mirrored .nb-src-view.prose { color: var(--nb-ink); }
+
+/* The compaction summary is prose *about* the session rather than part
+   of it — set apart, and quieter than either. */
+.nb-cell.compact .nb-md { color: var(--nb-muted); font-size: 13px; }
+.nb-cell.compact .nb-body {
+  border-left: 2px solid var(--nb-rule); padding-left: 14px; margin-left: -16px;
+}
+
+/* Long tool results collapse to their first line. Closed, the caret and
+   the line count are the whole affordance. */
+.out.toolres.long { padding: 0 0 0 13px; }
+.out.toolres.long > summary {
+  cursor: pointer; list-style: none; font: 12px var(--nb-mono); color: var(--nb-dim);
+  padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.out.toolres.long > summary::-webkit-details-marker { display: none; }
+.out.toolres.long > summary::before { content: "▸ "; color: var(--nb-muted); }
+.out.toolres.long[open] > summary::before { content: "▾ "; }
+.out.toolres.long > summary .more { color: var(--nb-muted); }
+.out.toolres.long > pre {
+  margin: 4px 0 6px; font: 12.5px/1.55 var(--nb-mono); color: var(--nb-dim);
+  white-space: pre-wrap; word-break: break-word; max-height: 440px; overflow: auto;
+}
+.out.toolres.err, .out.toolres.long.err > summary { color: #f2b3ad; }
+
+/* The terminal escape hatch on a session row (D8'). Hidden until hover:
+   the notebook is the default view now, and a permanently visible
+   "open the terminal instead" button would undercut that. */
+.agent.session { position: relative; }
+.agent.session .term {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  opacity: 0; transition: opacity .12s;
+  background: none; border: 1px solid var(--nb-rule); border-radius: 3px;
+  color: var(--nb-muted); font: 11px var(--nb-mono); cursor: pointer;
+  padding: 2px 6px;
+}
+.agent.session:hover .term, .agent.session .term:focus-visible { opacity: 1; }
+.agent.session .term:hover { color: var(--nb-ink); border-color: var(--nb-dim); }

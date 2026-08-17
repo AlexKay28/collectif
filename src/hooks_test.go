@@ -15,6 +15,14 @@ import (
 // stable.
 func newTestSession(t *testing.T, id, sid string) *Session {
 	t.Helper()
+	// A session now opens a notebook the moment its transcript watcher
+	// finds a file (ADR 0002), so every test session needs the notebook
+	// directory redirected — otherwise unrelated watcher tests write
+	// documents into the user's real ~/.collectif. Doing it here rather
+	// than per-test means no future test has to remember. Nesting is safe:
+	// t.Cleanup is LIFO, so a test that also calls withTempNotebooks gets
+	// its own dir restored in order.
+	withTempNotebooks(t)
 	s := newSession(id, sid, t.TempDir(), "")
 	s.HookToken = "ht-" + id
 	registerSession(s)

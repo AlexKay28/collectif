@@ -272,6 +272,9 @@ func (c *countingAdapter) TranscriptPath(string, string) (string, bool)   { retu
 func (c *countingAdapter) ParseTranscriptLine([]byte) (TranscriptEvent, error) {
 	return TranscriptEvent{}, nil
 }
+func (c *countingAdapter) ProjectTranscriptLine([]byte) ([]TranscriptPart, error) {
+	return nil, nil
+}
 func (c *countingAdapter) ModelContextLimit(string) int { return defaultContextLimit }
 
 // TestHandleCLIList_VersionCache — cachedVersion() must short-circuit

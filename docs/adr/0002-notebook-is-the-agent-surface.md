@@ -123,18 +123,63 @@ the code rather than hoped for. `CLIAdapter` (`src/cli.go`) exposes
 
 | Cell / signal | Claude Code | codex | opencode |
 |---|---|---|---|
-| User turns | transcript | transcript | transcript |
-| Assistant text | transcript | transcript | partial |
-| Thinking | transcript | — | — |
-| Tool call + input | `PreToolUse` hook + transcript | — | — |
-| Tool result | `PostToolUse` hook | — | — |
+| User turns | transcript | — | — |
+| Assistant text | transcript | — | — |
+| **Thinking** | **not available** (see below) | — | — |
+| Tool call + input | transcript | — | — |
+| Tool result | transcript | — | — |
 | Approval prompt | hook (structured) | PTY scrape (`menu.go`) | PTY scrape |
 | Usage / cost | transcript | transcript | transcript |
+| Subagent turns | separate files (see below) | — | — |
 
-**`TranscriptEvent` is today counts-only** — `Model`, four token counters, and
-three `*Chars` totals. It carries no message text at all. Projecting cells
-means widening it to carry content, which is the single largest piece of new
-work this ADR creates and the thing to prototype first (see §5, P0).
+> **Updated 2026-08-17 from P0's findings.** The rows above were written from
+> the format's documentation and my reading of it. Projecting a real 11 109-line
+> transcript corrected three of them; the corrections are the reason the spike
+> came first.
+
+**Everything a turn needs is in the transcript.** User prompts, assistant
+prose, tool calls with full input, and tool results with `is_error` all
+survive projection — hooks are not required for the *content*, only for
+approvals. `TranscriptEvent` was counts-only, so P0 adds `TranscriptPart` and
+`CLIAdapter.ProjectTranscriptLine` (one line → many parts) alongside it rather
+than widening it: one assistant message routinely carries thinking, prose, and
+a tool call, and a one-event-per-line signature would silently drop two of the
+three.
+
+**Thinking is not recoverable.** Across 50 transcripts and 7 453 thinking
+blocks on this machine, not one carries thinking *text* — Claude Code persists
+the `signature` and discards the summary. A projected session can therefore
+never show reasoning, however well we parse. This is a hard ceiling on the
+session view and an argument in favour of D10's detached notebooks, which get
+thinking directly off the stream.
+
+**Subagents live in their own files.** `isSidechain` is never true in a main
+transcript; subagent conversations are written to
+`<session>/subagents/agent-*.jsonl`, where every line *is* flagged. The same
+parser reads them unchanged, so M6's input problem is already solved — it
+needs a file watcher and nesting, not a second parser.
+
+**A transcript is a tree, not a list.** Every line names its `parentUuid`,
+and two user turns sharing a parent means the first was abandoned and
+re-sent. A projector that ignores this marks a question that was never
+answered as having succeeded — which the replayed document showed, twice.
+Interruptions are worse: pressing Escape writes a literal
+`[Request interrupted by user]` line with role `user`, no `origin` and no
+`isMeta`, so every provenance filter passes it and it renders as a prompt
+nobody typed. Both are now state changes on the turn they stopped rather
+than turns of their own. Matching English sentinel text is fragile and
+there is no other signal in the format; the mitigation is that the match is
+whole-line, so a prompt *about* interruption is still a prompt and a
+wording change degrades to the old behaviour rather than to lost turns.
+
+**The user/machine boundary is the hard part, and `isMeta` does not draw it.**
+Claude Code writes a great deal as the user that the user never typed. Line
+provenance is `origin.kind`; the filter fails *closed*, so an unrecognised kind
+is machinery until proven otherwise. Before that filter existed, one session
+projected a 47 KB background-task notification as a typed prompt. Compaction
+summaries (`isCompactSummary`) are real turns and get their own part kind,
+which answers open question 4 better than its own proposal did: compaction
+appends rather than rewriting, so nothing needs a marker.
 
 Where a column is empty the notebook shows fewer cells and a one-line note
 naming the missing capability. It does not scrape ANSI to invent them.
@@ -179,8 +224,8 @@ now about what a projected session can do, not about growing a competing agent.
 |---|---|---|
 | M0, M1 | done | **unchanged** — the foundation was right |
 | M2, M2.5 | done | **unchanged, re-scoped** as the detached-notebook backend (D10) |
-| **P0 — Projection spike** | — | **NEW, next.** Widen `TranscriptEvent` to carry content; project one real `claude` session into a read-only notebook. Exit: open a running session in the browser and read its turns as cells with no xterm involved. |
-| **P1 — Input + provenance** | — | **NEW.** Authored prompt cells write to the PTY; mirrored cells get their reduced verb set (D9); approvals render as inline widgets from hooks. Exit: drive a full `claude` session from the notebook, terminal never opened. |
+| **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
+| **P1 — Input + provenance** | — | **NEXT.** Authored prompt cells write to the PTY; approvals render as inline widgets from hooks. Most of D9's read-only half landed in P0; what remains is the write path. |
 | **P2 — Degradation** | — | **NEW.** Per-adapter capability surfacing (D11); codex and opencode render honestly. Exit: three CLIs, three fidelities, no lies. |
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
@@ -223,7 +268,7 @@ input path into a view that cannot show results.
 
 | Risk | Mitigation |
 |---|---|
-| The transcript does not carry enough to reconstruct a turn | P0 is a spike for exactly this, before any input work |
+| ~~The transcript does not carry enough to reconstruct a turn~~ | **Retired by P0 slice A** for Claude Code — prompts, prose, tool calls and results all project. Thinking does not, and that is now a known ceiling rather than a risk |
 | Projection lag makes the notebook feel behind the terminal | Hooks arrive ahead of transcript flushes; render optimistically from hooks and reconcile |
 | Users want the terminal back for the 5 % it does better | D8′ keeps it, unhidden |
 | Two backends drift | The cell event schema is shared and already tested; the projector and the loop are both event producers with one fold below them |
@@ -240,9 +285,17 @@ input path into a view that cannot show results.
    margin note, and the UI must make that obvious.
 3. **Does resuming a session (`--resume`) reopen its notebook or start a new
    one?** Proposed: reopen, appending; the log already supports it.
-4. **What happens to a mirrored cell when the transcript is rewritten**
-   (compaction)? Proposed: append a `compacted` marker event; never rewrite
-   history.
+4. ~~**What happens to a mirrored cell when the transcript is rewritten**
+   (compaction)?~~ **Answered by P0.** Claude Code appends a summary line and
+   never rewrites, so no marker is needed — the summary is projected as its own
+   part kind and rendered in place.
 5. **Should detached notebooks and session notebooks live in the same list?**
    The sidebar currently shows both under separate headings, which is a UI
    answer to an unanswered modelling question.
+6. **What settles the last turn of a session that is still running?** Today a
+   turn is closed by the next prompt or by the session ending, so the live
+   cell shows `running` for as long as the agent is idle at a prompt. Hooks
+   (`Stop`) would close it precisely; P1 territory.
+7. **Do abandoned branches belong in the document at all?** They are currently
+   shown as interrupted cells. Hiding them would read better and record less;
+   the log keeps them either way.

@@ -1,0 +1,407 @@
+package main
+
+// nb_session.go — a running CLI session, rendered as a notebook.
+// #47 P0 slice B, per ADR 0002.
+//
+// Slice A turned a transcript line into parts. This turns a stream of parts
+// into a document, and the shape it chooses is the argument of the whole
+// ADR: a prompt is a *cell*, and everything the agent did in response is
+// that cell's *output*. A terminal cannot make that distinction — it has
+// only one column, and your words and the machine's scroll past in it
+// together. A notebook keeps authored source and produced output apart,
+// which is what makes the result readable a week later.
+//
+// The projector is not the CLI's peer, it is its stenographer. It never
+// decides anything: no cell exists that the transcript did not report, no
+// state is set that the transcript did not justify.
+//
+// Idempotence is the requirement that shapes everything else here. This
+// runs against a file another process is appending to, across restarts
+// where we re-read from the top, so "append what I just saw" is wrong by
+// default. Every part carries the CLI's own line id; a line we have
+// already folded is skipped, and the set of seen ids is rebuilt from the
+// document rather than held only in memory — because the memory is what
+// the restart lost.
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"log"
+	"strings"
+	"sync"
+
+	"github.com/google/uuid"
+)
+
+// Provenance values for CellMeta. Empty means authored: you typed it, you
+// own it, every verb applies. The rest are ADR 0002 D9 — cells the notebook
+// is showing rather than cells it is running.
+const (
+	// ProvenanceMirrored marks a cell projected from a CLI session. It is
+	// read-only: the context that produced it lives inside a process we do
+	// not own, so it cannot be edited and re-run, only re-asked.
+	ProvenanceMirrored = "mirrored"
+	// ProvenanceCompact marks the summary a CLI wrote when it compacted its
+	// own context — the only surviving record of everything above it.
+	ProvenanceCompact = "compact"
+)
+
+// sessionProjector folds transcript parts into one notebook's log.
+//
+// It is single-writer by construction (one transcript watcher per session)
+// but holds a mutex anyway: Close races with the watcher's final Ingest on
+// every teardown path, and a duplicated terminal event is a document that
+// says a turn finished twice.
+type sessionProjector struct {
+	st *notebookStore
+
+	mu      sync.Mutex
+	seen    map[string]bool // CLI line ids already folded
+	current string          // the cell outputs are landing on
+	// currentParent is the open cell's parent line. Two prompts sharing a
+	// parent means the first was abandoned, and settling it "ok" would
+	// claim a question was answered when nothing ran.
+	currentParent string
+	// pendingParent hands the parent link to openCell without widening its
+	// signature for the one caller that has one.
+	pendingParent string
+	closed        bool
+}
+
+func newSessionProjector(st *notebookStore) *sessionProjector {
+	p := &sessionProjector{st: st, seen: map[string]bool{}}
+	p.reseedFromDocument()
+	return p
+}
+
+// reseedFromDocument rebuilds the seen-set and the open cell from the
+// notebook itself. This is what makes a restart safe: the log already knows
+// everything this projector was told before it died, so the truth is read
+// back out of the log rather than trusted to survive in memory.
+func (p *sessionProjector) reseedFromDocument() {
+	doc := p.st.Doc()
+	for i := range doc.Cells {
+		c := &doc.Cells[i]
+		if c.Meta.SourceUUID != "" {
+			p.seen[c.Meta.SourceUUID] = true
+		}
+		for _, o := range c.Outputs {
+			if id, ok := o.Data["sourceUuid"].(string); ok && id != "" {
+				p.seen[id] = true
+			}
+		}
+		// A cell left running is the turn that was in flight when we
+		// stopped; output resumes on it rather than opening a duplicate.
+		if c.Meta.Provenance == ProvenanceMirrored && c.State == CellRunning {
+			p.current, p.currentParent = c.ID, c.Meta.ParentUUID
+		}
+	}
+}
+
+// Ingest folds one transcript line's parts into the document. Parts from a
+// single line are handled together because the line, not the part, is the
+// unit the CLI assigns an id to.
+func (p *sessionProjector) Ingest(parts []TranscriptPart) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	for _, part := range parts {
+		// Subagent turns belong in their own document (M6 nests them).
+		// Interleaved into the parent they read as the main agent
+		// contradicting itself mid-turn.
+		if part.Sidechain {
+			continue
+		}
+		// A part with no id cannot be recognised on the next restart. We
+		// drop it rather than duplicate it on every reconnect: losing one
+		// line is a gap, duplicating it is a document that lies.
+		if part.UUID == "" || p.seen[part.UUID] {
+			continue
+		}
+		if p.apply(part) {
+			p.seen[part.UUID] = true
+		}
+	}
+}
+
+// apply folds one part, reporting whether it was recorded. A part we could
+// not write must not be marked seen, or a transient failure becomes a
+// permanent hole.
+func (p *sessionProjector) apply(part TranscriptPart) bool {
+	switch part.Kind {
+	case PartUserText:
+		// A new prompt ends the previous turn. The CLI does not announce
+		// that a turn is over; the next prompt is the announcement.
+		//
+		// Unless it is the *same* turn re-sent: a shared parent means the
+		// open cell was abandoned before it produced anything, which is an
+		// interruption rather than a success.
+		end := CellOK
+		if part.ParentUUID != "" && part.ParentUUID == p.currentParent {
+			end = CellInterrupted
+		}
+		p.settleCurrent(end)
+		p.pendingParent = part.ParentUUID
+		ok := p.openCell(CellPrompt, part.Text, ProvenanceMirrored, part.UUID, part.Model, CellRunning)
+		p.pendingParent = ""
+		p.currentParent = part.ParentUUID
+		return ok
+
+	case PartCompactSummary:
+		p.settleCurrent(CellOK)
+		ok := p.openCell(CellMarkdown, part.Text, ProvenanceCompact, part.UUID, "", CellOK)
+		// A summary is not a turn, so nothing hangs under it.
+		p.current = ""
+		return ok
+
+	case PartInterrupted:
+		// A state change on the turn that was running, not a turn. Whatever
+		// the agent produced before being stopped is kept — that is the
+		// difference between interrupted and failed.
+		p.settleCurrent(CellInterrupted)
+		return true
+
+	case PartAssistantText:
+		return p.appendOutput(part, Output{
+			Type: OutputText, Text: part.Text,
+			Data: map[string]any{"sourceUuid": part.UUID},
+		})
+
+	case PartThinking:
+		return p.appendOutput(part, Output{
+			Type: OutputThinking, Text: part.Text,
+			Data: map[string]any{"sourceUuid": part.UUID},
+		})
+
+	case PartToolCall:
+		data := map[string]any{
+			"sourceUuid": part.UUID,
+			"name":       part.ToolName,
+			"toolUseId":  part.ToolUseID,
+		}
+		// The input is the CLI's JSON. It is carried through as decoded
+		// values so the renderer can show a command as a command rather
+		// than as an escaped string.
+		if len(part.ToolInput) > 0 {
+			var in any
+			if json.Unmarshal(part.ToolInput, &in) == nil {
+				data["input"] = in
+			}
+		}
+		return p.appendOutput(part, Output{Type: OutputToolCall, Data: data})
+
+	case PartToolResult:
+		out := Output{
+			Type: OutputToolResult, Text: part.Text,
+			Data: map[string]any{"sourceUuid": part.UUID, "toolUseId": part.ToolUseID},
+		}
+		if part.IsError {
+			// The model treats a failed tool result as ordinary input and
+			// reacts to it, so this is output that failed, not a failed
+			// cell. The cell's own state is not touched.
+			out.Data["isError"] = true
+		}
+		return p.appendOutput(part, out)
+	}
+	return false
+}
+
+// openCell inserts a cell at the end and makes it the one output lands on.
+func (p *sessionProjector) openCell(typ CellType, source, provenance, srcUUID, model string, state CellState) bool {
+	cell := Cell{
+		ID:     uuid.NewString(),
+		Type:   typ,
+		Source: source,
+		State:  state,
+		Meta: CellMeta{
+			Provenance: provenance,
+			SourceUUID: srcUUID,
+			ParentUUID: p.pendingParent,
+			Model:      model,
+		},
+	}
+	if _, err := p.st.Append(evCellInserted, cellInsertedPayload{Cell: cell}); err != nil {
+		return false
+	}
+	p.current = cell.ID
+	return true
+}
+
+// appendOutput lands a produced block on the open cell, opening an honest
+// placeholder first if there isn't one.
+func (p *sessionProjector) appendOutput(part TranscriptPart, out Output) bool {
+	if p.current == "" {
+		// Attaching to a session already in flight is the normal case, not
+		// an edge one — you open the browser ten minutes in. The output has
+		// to land somewhere, and that somewhere must not claim to be a
+		// prompt the user typed, so the source stays empty and the UI can
+		// say what it is.
+		if !p.openCell(CellPrompt, "", ProvenanceMirrored, "", part.Model, CellRunning) {
+			return false
+		}
+	}
+	_, err := p.st.Append(evOutputAppended, outputAppendedPayload{
+		CellID: p.current,
+		Output: out,
+	})
+	return err == nil
+}
+
+// settleCurrent gives the open cell a terminal state. Without it every
+// finished turn keeps its spinner and the document reads as permanently in
+// flight — which is exactly as informative as a terminal that never
+// returns to a prompt.
+func (p *sessionProjector) settleCurrent(state CellState) {
+	if p.current == "" {
+		return
+	}
+	p.st.Append(evRunFinished, runFinishedPayload{ //nolint:errcheck // a lost terminal event is not worth failing the ingest
+		CellID: p.current,
+		Status: state,
+	})
+	p.current, p.currentParent = "", ""
+}
+
+// Close settles the turn that was in flight when the session ended. It is
+// idempotent because teardown paths are not perfectly sequenced and a turn
+// that finished twice is worse than one that finished late.
+func (p *sessionProjector) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.closed = true
+	p.settleCurrent(CellOK)
+}
+
+// ─── Opening a session's notebook ───────────────────────────────────────
+
+// sessionNotebookSlug maps a session id to a stable notebook id.
+//
+// Stability is the whole point: createNotebook uniquifies its slug so two
+// notebooks called "Notes" can coexist, which is right for documents you
+// author and exactly wrong here — a restart would open notebook number two
+// beside the session's real one and the history would appear to vanish.
+//
+// Session ids come from elsewhere and are not guaranteed to be slug-shaped,
+// so anything outside the allowed alphabet is folded to a dash and the
+// result is truncated to fit. Two ids that differ only in stripped
+// characters would collide, which is why the hash suffix is unconditional.
+func sessionNotebookSlug(sessionID string) string {
+	const prefix = "session-"
+	sum := sha256.Sum256([]byte(sessionID))
+	suffix := "-" + hex.EncodeToString(sum[:4])
+
+	var b strings.Builder
+	for _, r := range strings.ToLower(sessionID) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+		if b.Len() >= 32 {
+			break
+		}
+	}
+	body := strings.Trim(b.String(), "-_")
+	if body == "" {
+		body = "x"
+	}
+	return prefix + body + suffix
+}
+
+// openSessionNotebook returns the notebook for a session, creating it on
+// first use. The document outlives the process that produced it: a session
+// ends, its notebook stays, which is the difference between this and the
+// ring buffer it replaces.
+func openSessionNotebook(sessionID, cli, cwd string, caps Capabilities) (*notebookStore, error) {
+	slug := sessionNotebookSlug(sessionID)
+	if st, err := acquireNotebook(slug); err == nil {
+		return st, nil
+	} else if !errors.Is(err, errNotebookNotFound) {
+		return nil, err
+	}
+
+	title := cli + " · " + sessionID
+	st, err := openNamedNotebook(slug, title, cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// ADR 0002 D11: an adapter that cannot project says so, in the
+	// document, once. An empty notebook is indistinguishable from an agent
+	// that did nothing, and that is the kind of quiet wrongness this whole
+	// design exists to stop shipping.
+	if !caps.TranscriptContent {
+		cell := Cell{
+			ID:    uuid.NewString(),
+			Type:  CellMarkdown,
+			State: CellIdle,
+			Meta:  CellMeta{Provenance: ProvenanceMirrored},
+			Source: "## Not available for " + cli + "\n\n" +
+				"collectif cannot yet turn a `" + cli + "` session into a document — its transcript " +
+				"format has no projection written for it, so this notebook will stay empty while the " +
+				"session runs.\n\n" +
+				"This is a gap, not a failure: nothing here is reconstructed from terminal output, " +
+				"because a guess rendered as a transcript is worse than an absence. Use the terminal " +
+				"view for this session, and add cells of your own here if they are useful.",
+		}
+		if _, err := st.Append(evCellInserted, cellInsertedPayload{Cell: cell}); err != nil {
+			return nil, err
+		}
+	}
+	return st, nil
+}
+
+// openSessionProjector gives a session its notebook and the projector that
+// fills it, memoised on the session. Returns nil when the notebook cannot
+// be opened: a session must keep running and keep reporting usage even if
+// its document is unavailable, because the document is a view and the
+// session is the work.
+func openSessionProjector(s *Session) *sessionProjector {
+	s.mu.Lock()
+	if s.projector != nil {
+		p := s.projector
+		s.mu.Unlock()
+		return p
+	}
+	id, cwd := s.ID, s.Cwd
+	s.mu.Unlock()
+
+	adapter := s.adapter()
+	if adapter == nil {
+		return nil
+	}
+	st, err := openSessionNotebook(id, adapter.Name(), cwd, adapter.Capabilities())
+	if err != nil {
+		log.Printf("[%s] notebook unavailable: %v", id, err)
+		return nil
+	}
+	p := newSessionProjector(st)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Another goroutine may have won the race while we were on disk. Use
+	// its projector, not ours, or two of them fold into one log.
+	if s.projector != nil {
+		return s.projector
+	}
+	s.nb, s.projector = st, p
+	return p
+}
+
+// notebookSlugOf is the nil-safe accessor toJSON needs. Callers hold s.mu.
+func notebookSlugOf(st *notebookStore) string {
+	if st == nil {
+		return ""
+	}
+	return st.slug
+}

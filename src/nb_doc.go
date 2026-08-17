@@ -83,6 +83,23 @@ type CellMeta struct {
 	Effort    string   `json:"effort,omitempty"`
 	Collapsed bool     `json:"collapsed,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
+
+	// Provenance records who authored the cell (ADR 0002 D9). Empty means
+	// you typed it and every verb applies. "mirrored" means a CLI session
+	// produced it, and the cell is read-only — the context behind it lives
+	// inside a process we do not own, so it can be re-asked but not edited
+	// and re-run.
+	Provenance string `json:"provenance,omitempty"`
+
+	// SourceUUID is the CLI's own id for the transcript line this cell came
+	// from. It is the idempotency key: the projector re-reads a growing
+	// file across restarts, and this is how it recognises its own work.
+	SourceUUID string `json:"sourceUuid,omitempty"`
+
+	// ParentUUID is that line's parent. A transcript is a tree, and two
+	// prompts sharing a parent means the first was abandoned — a fact the
+	// projector needs back after a restart.
+	ParentUUID string `json:"parentUuid,omitempty"`
 }
 
 // Cell separates Source (authored, the user's) from Outputs (produced,

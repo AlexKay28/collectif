@@ -557,6 +557,28 @@ func createNotebook(title, root string) (*notebookStore, error) {
 	return st, nil
 }
 
+// openNamedNotebook creates a notebook at a caller-chosen slug. Used for
+// documents whose identity comes from something outside the notebook —
+// today, the session a notebook mirrors (ADR 0002). Ordinary notebooks go
+// through createNotebook, which derives a unique slug from the title.
+func openNamedNotebook(slug, title, root string) (*notebookStore, error) {
+	if !validNotebookSlug(slug) {
+		return nil, fmt.Errorf("invalid notebook id %q", slug)
+	}
+	nbRegistryMu.Lock()
+	defer nbRegistryMu.Unlock()
+
+	if st, ok := nbRegistry[slug]; ok && !st.isClosed() {
+		return st, nil
+	}
+	st, err := openNotebookStore(nbDirFn(), slug, title, root)
+	if err != nil {
+		return nil, err
+	}
+	nbRegistry[slug] = st
+	return st, nil
+}
+
 func releaseNotebook(slug string) error {
 	nbRegistryMu.Lock()
 	st, ok := nbRegistry[slug]

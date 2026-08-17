@@ -200,3 +200,10 @@ func (a *opencodeAdapter) ModelContextLimit(model string) int {
 	}
 	return defaultContextLimit
 }
+
+// ProjectTranscriptLine is not implemented for opencode. See the note on
+// the codex adapter — declaring the gap is the design (ADR 0002 D11), not
+// a placeholder to be filled with a scraper.
+func (a *opencodeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, error) {
+	return nil, nil
+}

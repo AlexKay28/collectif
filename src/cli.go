@@ -25,6 +25,11 @@ type Capabilities struct {
 	SubagentFiles        bool
 	PreCompact           bool
 	SessionIDPinning     bool
+	// TranscriptContent reports whether ProjectTranscriptLine returns
+	// notebook-shaped turns for this CLI (ADR 0002 D11). False means the
+	// session view degrades to counters and status, and says so — it never
+	// scrapes the PTY to make up the difference.
+	TranscriptContent bool
 }
 
 // TranscriptEvent is the CLI-agnostic shape the transcript watcher receives
@@ -91,6 +96,17 @@ type CLIAdapter interface {
 	// TranscriptEvent. Adapters must be defensive: lines that aren't
 	// usage-bearing should return HasUsage=false with no error.
 	ParseTranscriptLine(raw []byte) (TranscriptEvent, error)
+
+	// ProjectTranscriptLine turns one raw transcript line into the parts a
+	// notebook would render (ADR 0002 P0). One line may yield several
+	// parts — an assistant message routinely carries thinking, prose and a
+	// tool call — or none, which is the normal case for machinery lines.
+	//
+	// Adapters must never return an error for a malformed line: the file
+	// is written concurrently by another process and partial reads are
+	// routine. Return no parts instead. An adapter with no content to give
+	// returns nil and declares TranscriptContent: false.
+	ProjectTranscriptLine(raw []byte) ([]TranscriptPart, error)
 
 	// ModelContextLimit returns the context-window size in tokens for a
 	// model id this CLI emits. Adapters return a sensible default when
