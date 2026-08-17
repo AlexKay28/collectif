@@ -227,11 +227,11 @@ now about what a projected session can do, not about growing a competing agent.
 | **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
 | **P1 — Input + provenance** | — | **Done.** A: prompt cells write to the PTY and the projector adopts them back. B: the agent's questions arrive through the Notification hook and render as inline widgets, answerable in place; the ask and the verdict are two append-only records paired by id. Verified live — the agent asked permission, it was approved from the notebook, and the command ran. |
 | **P2 — Degradation** | — | **Done.** Fidelity is modelled per *surface* (turns / approvals / send / usage), not as one boolean, and derived on every read rather than stored. codex reads as `turns: false, approvals: true, send: true` — a real and useful answer that a single flag could not express. No projectors were written for codex or opencode: neither is installed here and there are no rollout files, and inventing a parser from documentation is the mistake P0 exists to have caught. |
-| M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
-| M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
-| M5 MCP (#54) | core | unchanged |
-| M6 subagents (#55) | our `task` tool | **also** projecting the CLI's own subagents (`SubagentFiles` capability) |
-| M7 default surface (#56) | notebook replaces dashboard | **notebook replaces the terminal panel**; the dashboard stays the front door |
+| M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead. Its stated purpose — "the first phase where collectif can damage something" — is already false: P1 slice B made it possible to approve a CLI's `rm -rf` from a browser tab |
+| M4 provider-agnostic (#53) | core bet | detached-notebook feature; low priority — a CLI has already chosen its provider |
+| M5 MCP (#54) | core | ~~unchanged~~ **detached-notebook feature, low priority.** Corrected 2026-08-17: every CLI collectif spawns already speaks MCP, so a client of our own serves only the smaller surface. Spike surfacing the CLI's `mcp__*` tool calls from hooks first — a fraction of the work, on the surface that has users |
+| M6 subagents (#55) | our `task` tool | **splits.** 55a projects the CLI's own subagents and is the highest-value work left; the parser already reads `subagents/agent-*.jsonl` unchanged, so what is missing is a watcher and a correlation, not a parser. 55b is our `task` tool, deferred |
+| M7 default surface (#56) | notebook replaces dashboard | **reversed.** The notebook replaces the terminal *panel*; the dashboard stays the front door. Half its scope already shipped — `cliExecutor` as P1's send path, the degraded badge as P2's fidelity block |
 
 P0 before P1 because a read-only projection is falsifiable in an afternoon and
 answers the only question that can kill this: whether the transcript carries
