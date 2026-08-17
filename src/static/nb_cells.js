@@ -83,6 +83,7 @@ function renderCell(cell) {
     <div class="nb-gutter">
       <span class="nb-type">${escapeHTML(cell.type)}</span>
       ${stateChip(cell)}
+      ${cacheChip(cell)}
     </div>
     <div class="nb-body">
       ${body}
@@ -119,9 +120,28 @@ function okLabel(cell) {
   const parts = [];
   if (cell.duration) parts.push(fmtDuration(cell.duration));
   const u = cell.usage || {};
+  // input_tokens is only the *uncached remainder*, so the prompt is the sum
+  // of all three. Reading input_tokens alone makes a working cache look
+  // like a shrinking prompt.
   const inTok = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheCreationTokens || 0);
   if (inTok || u.outputTokens) parts.push(`${fmtTokens(inTok)}→${fmtTokens(u.outputTokens || 0)}`);
   return parts.length ? parts.join(" · ") : "ok";
+}
+
+// cacheChip is the number M2.5 exists to produce (#51). It is rendered
+// separately, and rendered as a warning at zero, because a re-run showing
+// no cache reads is the canary for a projection bug — not a pricing
+// curiosity to notice later in a bill.
+function cacheChip(cell) {
+  const u = cell.usage || {};
+  const total = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheCreationTokens || 0);
+  if (!total) return "";
+  const pct = Math.round(((u.cacheReadTokens || 0) / total) * 100);
+  const cold = pct === 0;
+  const title = cold
+    ? "Nothing was served from cache. Expected on a first run; on a re-run of the same cell it means the prefix is not matching."
+    : `${pct}% of the prompt was served from cache`;
+  return `<span class="nb-chip chip-cache${cold ? " chip-cache-cold" : ""}" title="${escapeHTML(title)}">${pct}% cached</span>`;
 }
 
 function fmtTokens(n) {

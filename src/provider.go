@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"sort"
 	"strings"
 )
 
@@ -170,6 +171,31 @@ type Request struct {
 	// Effort is the primary cost/latency lever where a transport supports
 	// it (low|medium|high|xhigh|max); ignored where it does not.
 	Effort string
+	// StablePrefixMessages is how many leading messages are the projected
+	// notebook prefix rather than turns produced by the running loop. It is
+	// the span worth reusing between runs, so a transport that supports
+	// prompt caching marks its end. Zero means "nothing is known to be
+	// stable" and no prefix breakpoint is placed.
+	StablePrefixMessages int
+}
+
+// cacheHitRatio is the proportion of a turn's prompt that was served from
+// cache. It is the number M2.5 exists to produce: zero across repeated runs
+// of the same notebook means the prefix is not matching, which is a bug in
+// how the request is rendered rather than a pricing curiosity.
+func cacheHitRatio(u Usage) float64 {
+	total := promptTokens(u)
+	if total == 0 {
+		return 0
+	}
+	return float64(u.CacheReadTokens) / float64(total)
+}
+
+// promptTokens is the real size of the prompt. input_tokens is only the
+// uncached remainder, so reading it alone makes a working cache look like a
+// shrinking prompt.
+func promptTokens(u Usage) int64 {
+	return u.InputTokens + u.CacheReadTokens + u.CacheCreationTokens
 }
 
 type ChunkType string
@@ -234,10 +260,19 @@ func lookupTool(name string) Tool {
 	return nil
 }
 
+// toolSpecs returns the enabled tools in a stable order.
+//
+// Sorting is not tidiness. Tools render at position 0 of the request, so
+// their order is the most destructive thing that can vary: a different
+// order invalidates the entire cached prefix — system and every message
+// with it — and nothing fails, it just silently costs full price. Today the
+// registration order happens to be fixed; once MCP servers register tools
+// on connect (M5) it will not be.
 func toolSpecs() []ToolSpec {
 	out := make([]ToolSpec, 0, len(activeTools))
 	for _, t := range activeTools {
 		out = append(out, t.Spec())
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }

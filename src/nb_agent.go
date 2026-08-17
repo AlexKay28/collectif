@@ -64,6 +64,10 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 		effort = doc.Meta.Effort
 	}
 
+	// The projected prefix is what two runs of this cell share. Turns the
+	// loop appends below are new every time.
+	stablePrefix := len(msgs)
+
 	var total Usage
 	status := CellOK
 
@@ -80,6 +84,11 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			Tools:     toolSpecs(),
 			MaxTokens: defaultMaxTokens,
 			Effort:    effort,
+			// Everything the projection produced is identical between two
+			// runs of this cell; everything this loop appends after it is
+			// not. Telling the transport where that line falls is what
+			// lets the reusable span be cached (#51).
+			StablePrefixMessages: stablePrefix,
 		})
 		if err != nil {
 			if run.wasInterrupted() || errors.Is(err, context.Canceled) {

@@ -264,3 +264,8 @@ html, body {
 .out.tool .tool-name { color: var(--nb-accent); }
 .out.tool .tool-args { color: var(--nb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .out.toolres { border-left: 2px solid var(--nb-rule); border-radius: 0 4px 4px 0; }
+
+/* #51 — cache-hit readout. Zero is a signal, not a neutral fact: on a
+   re-run it means the projected prefix stopped matching. */
+.chip-cache { color: var(--nb-ok); border-color: rgba(127, 216, 143, 0.35); }
+.chip-cache-cold { color: var(--nb-warn); border-color: var(--nb-warn); }

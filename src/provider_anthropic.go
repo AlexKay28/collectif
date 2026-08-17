@@ -94,14 +94,9 @@ func buildAnthropicRequest(req Request) anthropic.MessageNewParams {
 	}
 
 	if req.System != "" {
-		// The cache is a prefix match over exact bytes rendered
-		// tools -> system -> messages, so the breakpoint goes on the last
-		// stable block. Without it every run re-pays for the whole prefix,
-		// which is what makes re-projection affordable or not (#51).
-		params.System = []anthropic.TextBlockParam{{
-			Text:         req.System,
-			CacheControl: anthropic.NewCacheControlEphemeralParam(),
-		}}
+		// The breakpoint itself is placed by placeCacheBreakpoints below,
+		// which owns the whole four-marker budget.
+		params.System = []anthropic.TextBlockParam{{Text: req.System}}
 	}
 
 	if effort, ok := anthropicEffort(req.Effort); ok {
@@ -111,12 +106,119 @@ func buildAnthropicRequest(req Request) anthropic.MessageNewParams {
 	for _, spec := range req.Tools {
 		params.Tools = append(params.Tools, anthropic.ToolUnionParam{OfTool: anthropicTool(spec)})
 	}
-	for _, m := range req.Messages {
+	// Track which built message each source message became, so breakpoints
+	// can be placed by source index even though empty messages are dropped.
+	builtIndex := make([]int, len(req.Messages))
+	for i := range builtIndex {
+		builtIndex[i] = -1
+	}
+	for i, m := range req.Messages {
 		if mapped, ok := anthropicMessage(m); ok {
+			builtIndex[i] = len(params.Messages)
 			params.Messages = append(params.Messages, mapped)
 		}
 	}
+	placeCacheBreakpoints(&params, req, builtIndex)
 	return params
+}
+
+// anthropicMaxBreakpoints is the API's hard limit. A fifth is rejected, so
+// the budget is spent deliberately here rather than discovered in
+// production.
+const anthropicMaxBreakpoints = 4
+
+// anthropicBlockStride is how many content blocks may accumulate before
+// another breakpoint is placed.
+//
+// A breakpoint searches backward at most 20 content blocks for a prior
+// entry. One tool-heavy turn blows past that inside a single exchange, and
+// the failure is silent: the next request simply misses and pays full
+// price. Fifteen leaves room for the blocks a turn adds after the last
+// placement.
+const anthropicBlockStride = 15
+
+// placeCacheBreakpoints spends the four-breakpoint budget.
+//
+// The cache is a prefix match over exact bytes rendered tools → system →
+// messages, so placement is: the end of tools+system (one marker on the
+// last system block covers both), the end of the projected notebook prefix
+// — the span that is identical between two runs of the same cell — and then
+// rolling markers through a long loop to stay inside the lookback window.
+//
+// Note what is deliberately *not* marked: the final message. It changes
+// every run by definition, so a breakpoint there would only ever write.
+func placeCacheBreakpoints(params *anthropic.MessageNewParams, req Request, builtIndex []int) {
+	spent := 0
+	if len(params.System) > 0 {
+		// Tools render before system, so one marker here caches both.
+		params.System[len(params.System)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		spent++
+	}
+
+	mark := func(msgIdx int) bool {
+		if spent >= anthropicMaxBreakpoints || msgIdx < 0 || msgIdx >= len(params.Messages) {
+			return false
+		}
+		blocks := params.Messages[msgIdx].Content
+		if len(blocks) == 0 {
+			return false
+		}
+		if !setBlockCacheControl(&blocks[len(blocks)-1]) {
+			return false
+		}
+		spent++
+		return true
+	}
+
+	// The end of the projected prefix: everything above the cell being run.
+	// This is the span two runs of the same cell share, so it is the one
+	// that decides whether re-projection is affordable at all.
+	prefixEnd := -1
+	if n := req.StablePrefixMessages; n > 0 && n <= len(builtIndex) {
+		for i := n - 1; i >= 0; i-- {
+			if builtIndex[i] >= 0 {
+				prefixEnd = builtIndex[i]
+				break
+			}
+		}
+	}
+	mark(prefixEnd)
+
+	// Then walk the loop's own turns, leaving a marker whenever enough
+	// blocks have accumulated to threaten the lookback window.
+	since := 0
+	for i := prefixEnd + 1; i < len(params.Messages); i++ {
+		since += len(params.Messages[i].Content)
+		if since < anthropicBlockStride {
+			continue
+		}
+		// Never mark the final message: it differs on every request, so a
+		// breakpoint there can only ever write and never read.
+		if i == len(params.Messages)-1 {
+			break
+		}
+		if !mark(i) {
+			break
+		}
+		since = 0
+	}
+}
+
+// setBlockCacheControl attaches a breakpoint to whichever block variant
+// this is. Only the block kinds the loop actually produces are handled;
+// anything else declines rather than silently dropping the marker.
+func setBlockCacheControl(block *anthropic.ContentBlockParamUnion) bool {
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	default:
+		return false
+	}
+	return true
 }
 
 func anthropicEffort(effort string) (anthropic.OutputConfigEffort, bool) {
