@@ -45,6 +45,7 @@ func (a *claudeAdapter) Capabilities() Capabilities {
 		SubagentFiles:        true,
 		PreCompact:           true,
 		SessionIDPinning:     true,
+		TranscriptContent:    true,
 	}
 }
 
