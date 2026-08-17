@@ -122,7 +122,53 @@ export function renderOutputs(cell, liveText) {
   }
   const outs = cell.outputs || [];
   if (!outs.length) return "";
-  return outs.map(renderOutput).join("");
+
+  // Approvals are recorded append-only: the question when the agent asks,
+  // the verdict when it is answered, paired by id. The reader wants one
+  // thing, so the pair is folded here rather than in the log — the log
+  // keeps both, because "asked at T1, denied at T2" is the audit trail.
+  const verdicts = new Map();
+  for (const o of outs) {
+    const d = o.data || {};
+    if (o.type === "approval" && d.resolution) verdicts.set(d.approvalId, d.resolution);
+  }
+  return outs
+    .filter((o) => !(o.type === "approval" && (o.data || {}).resolution))
+    .map((o) => (o.type === "approval"
+      ? renderApproval(o, verdicts.get((o.data || {}).approvalId))
+      : renderOutput(o)))
+    .join("");
+}
+
+// An approval is the one block in a document where the reader has to
+// decide something, so it is the one block that gets a border. Everything
+// else here is a record; this is a question, and until it is answered the
+// agent is stopped — including for any prompt you try to send, which will
+// otherwise be read as the answer.
+function renderApproval(o, verdict) {
+  const d = o.data || {};
+  const id = escapeHTML(String(d.approvalId || ""));
+  const tool = d.tool ? `<span class="tool">${escapeHTML(String(d.tool))}</span>` : "";
+  const args = toolArgs(d.input);
+
+  if (verdict) {
+    const label = { approved: "approved", denied: "denied", expired: "expired, unanswered" }[verdict] || verdict;
+    return `<div class="out approval done ${escapeHTML(verdict)}">
+              <span class="mark"></span>
+              <div class="q">${tool}${escapeHTML(o.text || "")}
+                ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}</div>
+              <span class="verdict">${escapeHTML(label)}</span>
+            </div>`;
+  }
+  return `<div class="out approval open" data-approval="${id}">
+            <span class="mark"></span>
+            <div class="q">${tool}${escapeHTML(o.text || "")}
+              ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}</div>
+            <div class="acts">
+              <button data-answer="deny" data-approval-id="${id}">Deny</button>
+              <button data-answer="approve" data-approval-id="${id}" class="ok">Approve</button>
+            </div>
+          </div>`;
 }
 
 function renderOutput(o) {

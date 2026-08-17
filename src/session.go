@@ -888,6 +888,10 @@ func startPendingSweeper() {
 				if s.pendingExpired() {
 					s.clearPending()
 					s.appendActivity(ActivityEntry{Event: "PermissionPromptExpired", Level: "warn"})
+					// Recorded as expiry, not as an answer: nobody decided
+					// anything, and a log that says otherwise is a false
+					// audit trail (#47 P1 slice B).
+					recordApprovalResolution(s, "expired")
 					s.touch()
 				}
 			}

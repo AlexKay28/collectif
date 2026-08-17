@@ -125,6 +125,8 @@ func handleNotebookByID(w http.ResponseWriter, r *http.Request) {
 			handleCellRun(w, r, st, cellID)
 		case "interrupt":
 			handleCellInterrupt(w, r, st, cellID)
+		case "approve":
+			handleCellApprove(w, r, st, cellID)
 		default:
 			http.Error(w, "unknown subpath", http.StatusNotFound)
 		}

@@ -87,6 +87,8 @@ export const nbAPI = {
     api("POST", `/api/nb/${id}/cells/${cid}/move`, { beforeCellId }),
   runCell: (id, cid) => api("POST", `/api/nb/${id}/cells/${cid}/run`),
   interruptCell: (id, cid) => api("POST", `/api/nb/${id}/cells/${cid}/interrupt`),
+  answerApproval: (id, cid, answer) =>
+    api("POST", `/api/nb/${id}/cells/${cid}/approve`, { answer }),
 };
 
 // ─── Fold ─────────────────────────────────────────────────────────────
