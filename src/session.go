@@ -316,6 +316,16 @@ func newWSSub(c *websocket.Conn, kind, queue int) *wsSub {
 // test can drive the keepalive without waiting half a minute.
 var wsPingEvery = 25 * time.Second
 
+// wsWriteTimeout bounds a single frame write.
+//
+// Without it, a client that stops reading — a suspended laptop, a paused
+// tab, a proxy that has gone away — fills the TCP window and WriteMessage
+// blocks forever. The pump goroutine is pinned and its queue with it (up to
+// 8 MB for a session at 256 x 32 KB), while send() keeps dropping so the
+// server looks perfectly healthy. Silent, permanent, and one per stalled
+// tab. A var so a test can hit the timeout without waiting.
+var wsWriteTimeout = 10 * time.Second
+
 func (w *wsSub) pump() {
 	// Ping on a timer as well as draining the queue. The handlers set a 60s
 	// read deadline and re-arm it from the pong handler, but nothing was
@@ -328,6 +338,11 @@ func (w *wsSub) pump() {
 	for {
 		select {
 		case msg := <-w.out:
+			// Bound every write. A blocked write is not a slow client we
+			// should wait for — it is a client that has stopped reading,
+			// and waiting for it costs a pinned goroutine and a pinned
+			// queue for the life of the process.
+			_ = w.c.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if err := w.c.WriteMessage(w.kind, msg); err != nil {
 				w.stop()
 				return
@@ -335,7 +350,7 @@ func (w *wsSub) pump() {
 		case <-ticker.C:
 			// pump is the only writer, so writing a control frame here
 			// needs no extra synchronisation.
-			if err := w.c.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+			if err := w.c.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteTimeout)); err != nil {
 				w.stop()
 				return
 			}
