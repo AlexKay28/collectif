@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,4 +311,43 @@ func TestWSSub_SendsPingsSoIdleSocketsSurvive(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no ping within 5s — an idle socket would hit the 60s read deadline and be dropped")
 	}
+}
+
+// wsSub.stop() closed the outbound channel while producers could still be
+// sending on it. That is a data race, and its payoff is a "send on closed
+// channel" panic that takes the whole process down — reachable whenever a
+// subscriber disconnects while a run is streaming to it.
+//
+// Pre-existing in the shared plumbing rather than notebook-specific; the
+// agent loop simply broadcasts fast enough to hit the window reliably.
+func TestWSSub_SubscriberLeavingMidStreamIsSafe(t *testing.T) {
+	f := newNBFixture(t)
+
+	var wg sync.WaitGroup
+	// Producers: keep broadcasting the way a streaming run does.
+	stop := make(chan struct{})
+	for p := 0; p < 4; p++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					f.st.broadcastDelta("c1", "r1", "streaming output\n")
+				}
+			}
+		}()
+	}
+
+	// Subscribers that connect and leave while that is happening.
+	for i := 0; i < 25; i++ {
+		conn, closeWS := f.dialWSRaw(t)
+		time.Sleep(time.Millisecond)
+		conn.Close()
+		closeWS()
+	}
+	close(stop)
+	wg.Wait()
 }
