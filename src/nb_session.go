@@ -77,7 +77,12 @@ type sessionProjector struct {
 	// adoptGen invalidates a pending give-up timer when the cell it was
 	// watching is adopted or replaced.
 	adoptGen uint64
-	closed   bool
+	// approvalKey/approvalID track the question the agent is currently
+	// asking, so a hook that fires twice records it once and the answer
+	// can be paired with it.
+	approvalKey string
+	approvalID  string
+	closed      bool
 }
 
 func newSessionProjector(st *notebookStore) *sessionProjector {

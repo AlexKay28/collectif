@@ -247,6 +247,23 @@ function wire() {
       render();
     }),
   );
+  root.querySelectorAll("[data-answer]").forEach((b) =>
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const cell = b.closest("[data-cell]");
+      b.disabled = true;
+      try {
+        await nbAPI.answerApproval(state.id, cell.dataset.cell, b.dataset.answer);
+      } catch (err) {
+        b.disabled = false;
+        // The agent may have timed out, or been answered from the
+        // terminal. Either way the reason belongs on the cell, not in a
+        // toast that scrolls away above a long document.
+        state.cellErrors.set(cell.dataset.cell, String(err && err.message ? err.message : err));
+        render();
+      }
+    }),
+  );
   root.querySelectorAll("[data-dismiss]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();

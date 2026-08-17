@@ -246,6 +246,23 @@ func handleAgentAnswer(w http.ResponseWriter, r *http.Request, s *Session, prima
 		http.Error(w, "pty not ready", http.StatusServiceUnavailable)
 		return
 	}
+	answerViaPTY(s, primary, fallback)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// answerViaPTY performs the keystroke dance for a permission prompt: the
+// primary chunks, then the fallback 1.5s later if the prompt is still up.
+//
+// Shared by the dashboard and the notebook (#47 P1 slice B) so the two
+// surfaces cannot drift into answering the same question differently —
+// which would be a genuinely bad bug, since the difference between "yes"
+// and "1" landing is the difference between approving a command and
+// selecting an arbitrary menu item.
+func answerViaPTY(s *Session, primary, fallback []string) {
+	pt := s.pty()
+	if pt == nil {
+		return
+	}
 	writeChunks := func(label string, chunks []string) {
 		for i, k := range chunks {
 			n, err := pt.Write([]byte(k))
@@ -264,7 +281,6 @@ func handleAgentAnswer(w http.ResponseWriter, r *http.Request, s *Session, prima
 			writeChunks("fallback", fallback)
 		}
 	}()
-	w.WriteHeader(http.StatusNoContent)
 }
 
 type resizeReq struct {

@@ -225,7 +225,7 @@ now about what a projected session can do, not about growing a competing agent.
 | M0, M1 | done | **unchanged** — the foundation was right |
 | M2, M2.5 | done | **unchanged, re-scoped** as the detached-notebook backend (D10) |
 | **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
-| **P1 — Input + provenance** | — | **Slice A done.** Prompt cells write to the PTY and the projector adopts them back, so the cell you typed becomes the cell that ran. Slice B — approvals as inline widgets — is next, and is now also load-bearing for *sending* (see below). |
+| **P1 — Input + provenance** | — | **Done.** A: prompt cells write to the PTY and the projector adopts them back. B: the agent's questions arrive through the Notification hook and render as inline widgets, answerable in place; the ask and the verdict are two append-only records paired by id. Verified live — the agent asked permission, it was approved from the notebook, and the command ran. |
 | **P2 — Degradation** | — | **NEW.** Per-adapter capability surfacing (D11); codex and opencode render honestly. Exit: three CLIs, three fidelities, no lies. |
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
@@ -262,8 +262,21 @@ So the design does not pretend otherwise:
   the terminal. Before this the cell sat at "running" forever, which is
   indistinguishable from an agent thinking hard.
 
-This promotes slice B from a rendering feature to a correctness one: until
-dialogs are surfaced as widgets, they are invisible obstacles that eat input.
+This promoted slice B from a rendering feature to a correctness one, and
+slice B closes the part of it that can be closed. Permission prompts arrive
+through the `Notification` hook — structured, not scraped — and now render in
+the cell that provoked them, so the thing blocking your prompt is visible and
+answerable without leaving the document. What remains open is startup dialogs
+(trust-this-folder, set-up-auto-mode): they fire no hook, `menu.go` does not
+match them, and the 20s delivery timeout is still the only thing that catches
+them. That is a known gap, not a solved problem.
+
+The approval record is deliberately two entries rather than one mutable block:
+the question when the agent asks, the verdict when a human answers, paired by
+id. What it records is the *decision*, not the agent's receipt of it — a
+terminal acknowledges nothing — and an unanswered prompt that the sweeper
+clears is recorded as `expired`, never as an approval. This is the audit trail
+ADR 0001 §4.6 wanted and the scrollback could not give.
 
 ### One more thing collectif was doing to itself
 

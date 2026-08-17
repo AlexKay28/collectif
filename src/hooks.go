@@ -145,6 +145,10 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 			s.setPending(msg)
 			s.appendActivity(ActivityEntry{Event: "PermissionPrompt", Detail: msg, Level: "warn"})
 			s.setStatus("waiting_input", truncate(msg, 80))
+			// #47 P1 slice B: put the question in the session's notebook.
+			// Repeats are collapsed there — this hook fires more than once
+			// for one prompt on some versions.
+			recordApprovalRequest(s)
 		}
 
 	case "Stop":
