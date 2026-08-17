@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>collectif — notebook</title>
+<link rel="stylesheet" href="nb.css">
+</head>
+<body>
+<div id="nb-app">
+
+  <header id="nb-head">
+    <h1>collectif</h1>
+    <select id="nb-picker" aria-label="Open notebook"></select>
+    <button id="nb-new" type="button">+ Notebook</button>
+    <span id="nb-root"></span>
+    <span class="sp"></span>
+    <a href="/" style="color:var(--nb-muted);font:11px var(--nb-mono);text-decoration:none">dashboard →</a>
+  </header>
+
+  <div id="nb-error" role="alert"></div>
+
+  <main id="nb-cells"></main>
+
+  <div id="nb-keys">
+    <b>Enter</b> edit · <b>Esc</b> command · <b>⇧Enter</b> run + next<br>
+    <b>a</b>/<b>b</b> insert above/below · <b>dd</b> delete · <b>i</b> interrupt<br>
+    <b>m</b>/<b>y</b> to markdown/shell · <b>j</b>/<b>k</b> move
+  </div>
+
+</div>
+
+<script type="module">
+import { state, nbAPI, openNotebook, onChange } from "./nb.js";
+import { mountCells, showError } from "./nb_cells.js";
+
+const picker = document.getElementById("nb-picker");
+const rootLabel = document.getElementById("nb-root");
+
+async function refreshList(selectID) {
+  const list = await nbAPI.list();
+  picker.innerHTML = list.length
+    ? list.map((n) => `<option value="${n.id}">${n.title || n.id}</option>`).join("")
+    : `<option value="">no notebooks yet</option>`;
+  const want = selectID || state.id || (list[0] && list[0].id);
+  if (want) {
+    picker.value = want;
+    if (want !== state.id) await openNotebook(want);
+  }
+  return list;
+}
+
+picker.addEventListener("change", () => {
+  if (picker.value) {
+    state.selected = null;
+    openNotebook(picker.value).catch(showError);
+  }
+});
+
+document.getElementById("nb-new").addEventListener("click", async () => {
+  const title = prompt("Notebook title", "Untitled notebook");
+  if (title === null) return;
+  // The root is the working directory every cell runs in, and in M3 it
+  // becomes the boundary tools are contained to — so it is asked for
+  // explicitly rather than guessed.
+  const root = prompt("Working directory (absolute path)", state.notebook?.root || "");
+  if (!root) return;
+  try {
+    const created = await nbAPI.create(title, root);
+    state.selected = null;
+    await refreshList(created.id);
+  } catch (err) {
+    showError(err);
+  }
+});
+
+onChange(() => {
+  rootLabel.textContent = state.notebook?.root || "";
+  if (state.notebook && picker.value !== state.notebook.id) {
+    picker.value = state.notebook.id;
+  }
+});
+
+mountCells(document.getElementById("nb-cells"));
+refreshList().catch(showError);
+</script>
+</body>
+</html>

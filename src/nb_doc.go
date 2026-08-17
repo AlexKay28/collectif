@@ -45,6 +45,10 @@ const (
 	CellRunning CellState = "running"
 	CellOK      CellState = "ok"
 	CellError   CellState = "error"
+	// CellInterrupted is a run the user stopped. Distinct from error: the
+	// cell didn't fail, it was cut short, and whatever it produced before
+	// the kill is kept.
+	CellInterrupted CellState = "interrupted"
 	// CellStale marks a cell whose result no longer reflects the cells
 	// above it. Advisory only — we never re-run it automatically, because
 	// unlike a spreadsheet an agent turn costs money and touches disks.
