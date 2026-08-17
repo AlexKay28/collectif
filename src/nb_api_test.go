@@ -409,3 +409,42 @@ func TestNotebookWS_UnknownNotebookIs404(t *testing.T) {
 		t.Fatalf("status = %v, want 404", resp)
 	}
 }
+
+// Changing a cell's type is a command-mode verb in Jupyter (y for code, m
+// for markdown) and one of the ones people reach for constantly — you type
+// a paragraph into the wrong cell and fix it with one key. Without a
+// backend for it the keys are decoration, so the log has to be able to
+// express the change.
+func TestNotebookAPI_CellTypeCanBeChanged(t *testing.T) {
+	f := newNBFixture(t)
+	cell := f.addCell(t, "shell", "not actually a command")
+
+	rec := nbRequest(t, f.srv, "PATCH", f.base+"/cells/"+cell, map[string]any{"type": "markdown"})
+	if rec.Code != 200 {
+		t.Fatalf("PATCH type = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	doc := f.st.Doc()
+	i := indexOfCell(doc, cell)
+	if i < 0 {
+		t.Fatalf("cell vanished")
+	}
+	if doc.Cells[i].Type != CellMarkdown {
+		t.Errorf("type = %q, want markdown", doc.Cells[i].Type)
+	}
+	if doc.Cells[i].Source != "not actually a command" {
+		t.Errorf("retyping a cell rewrote its source to %q", doc.Cells[i].Source)
+	}
+}
+
+// A type the fold does not model must be refused at the door, exactly as
+// it is on insert — otherwise the log carries a cell nothing can render.
+func TestNotebookAPI_CellTypeChangeRejectsUnknownType(t *testing.T) {
+	f := newNBFixture(t)
+	cell := f.addCell(t, "shell", "echo hi")
+
+	rec := nbRequest(t, f.srv, "PATCH", f.base+"/cells/"+cell, map[string]any{"type": "kernel"})
+	if rec.Code != 400 {
+		t.Errorf("PATCH with an unknown type = %d, want 400", rec.Code)
+	}
+}

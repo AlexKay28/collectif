@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>collectif — notebook</title>
+<title>collectif</title>
 <link rel="stylesheet" href="nb.css">
 </head>
 <body>
@@ -11,69 +11,237 @@
 
   <header id="nb-head">
     <h1>collectif</h1>
-    <select id="nb-picker" aria-label="Open notebook"></select>
-    <button id="nb-new" type="button">+ Notebook</button>
-    <span id="nb-root"></span>
+    <span class="stat"><b id="stat-agents">0</b> notebooks</span>
+    <span class="stat"><b id="stat-running">0</b> sessions</span>
     <span class="sp"></span>
-    <a href="/" style="color:var(--nb-muted);font:11px var(--nb-mono);text-decoration:none">dashboard →</a>
+    <a href="/" title="The original PTY dashboard, still the front door until M7">terminal dashboard →</a>
   </header>
 
   <div id="nb-error" role="alert"></div>
 
-  <main id="nb-cells"></main>
+  <div id="nb-main">
+    <aside id="nb-side">
+      <div class="side-label">Notebooks</div>
+      <div id="nb-list"></div>
 
-  <div id="nb-keys">
-    <b>Enter</b> edit · <b>Esc</b> command · <b>⇧Enter</b> run + next<br>
-    <b>a</b>/<b>b</b> insert above/below · <b>dd</b> delete · <b>i</b> interrupt<br>
-    <b>m</b>/<b>y</b> to markdown/shell · <b>j</b>/<b>k</b> move
+      <div class="side-label" id="sess-label" style="display:none">Running sessions</div>
+      <div id="nb-sessions"></div>
+
+      <div class="side-foot">
+        <button id="nb-new" type="button">+ New notebook</button>
+      </div>
+    </aside>
+
+    <section id="nb-doc">
+      <div id="nb-doc-head">
+        <span class="title" id="doc-title"></span>
+        <span class="root" id="doc-root"></span>
+      </div>
+      <main id="nb-cells"></main>
+    </section>
+  </div>
+
+  <div id="nb-keys">press <b>h</b> for keyboard shortcuts</div>
+
+  <!-- Jupyter's own help is a modal keyboard map on `h`; the shortcut is
+       worth nothing if you cannot discover the rest of them from it. -->
+  <div id="nb-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+    <div class="sheet">
+      <header>
+        <h2>Keyboard shortcuts</h2>
+        <span class="hint">Esc or <b>q</b> to close</span>
+      </header>
+
+      <div class="cols">
+        <section>
+          <h3>Modes</h3>
+          <dl>
+            <dt><kbd>Enter</kbd></dt><dd>edit the selected cell</dd>
+            <dt><kbd>Esc</kbd> <span class="or">/</span> <kbd>Ctrl</kbd>+<kbd>M</kbd></dt><dd>back to command mode</dd>
+          </dl>
+
+          <h3>Run</h3>
+          <dl>
+            <dt><kbd>⇧</kbd>+<kbd>Enter</kbd></dt><dd>run, select below</dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>run in place</dd>
+            <dt><kbd>Alt</kbd>+<kbd>Enter</kbd></dt><dd>run, insert below</dd>
+            <dt><kbd>i</kbd> <kbd>i</kbd></dt><dd>interrupt the run</dd>
+          </dl>
+
+          <h3>Move</h3>
+          <dl>
+            <dt><kbd>j</kbd> <span class="or">/</span> <kbd>↓</kbd></dt><dd>select below</dd>
+            <dt><kbd>k</kbd> <span class="or">/</span> <kbd>↑</kbd></dt><dd>select above</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3>Edit the notebook</h3>
+          <dl>
+            <dt><kbd>a</kbd> <span class="or">/</span> <kbd>b</kbd></dt><dd>insert cell above / below</dd>
+            <dt><kbd>d</kbd> <kbd>d</kbd></dt><dd>delete cell</dd>
+            <dt><kbd>z</kbd></dt><dd>undo cell deletion</dd>
+            <dt><kbd>x</kbd> <kbd>c</kbd> <kbd>v</kbd></dt><dd>cut, copy, paste below</dd>
+            <dt><kbd>⇧</kbd>+<kbd>v</kbd></dt><dd>paste above</dd>
+            <dt><kbd>⇧</kbd>+<kbd>m</kbd></dt><dd>merge with cell below</dd>
+          </dl>
+
+          <h3>Cell type</h3>
+          <dl>
+            <dt><kbd>m</kbd></dt><dd>markdown</dd>
+            <dt><kbd>y</kbd></dt><dd>shell</dd>
+            <dt><kbd>p</kbd></dt><dd>prompt</dd>
+            <dt><kbd>f</kbd></dt><dd>file</dd>
+          </dl>
+        </section>
+
+        <section>
+          <h3>Output</h3>
+          <dl>
+            <dt><kbd>o</kbd></dt><dd>hide / show output</dd>
+            <dt><kbd>⇧</kbd>+<kbd>o</kbd></dt><dd>unlock output height</dd>
+          </dl>
+
+          <h3>While editing</h3>
+          <dl>
+            <dt><kbd>Tab</kbd> <span class="or">/</span> <kbd>⇧</kbd>+<kbd>Tab</kbd></dt><dd>indent / dedent</dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>⇧</kbd>+<kbd>-</kbd></dt><dd>split cell at cursor</dd>
+          </dl>
+
+          <h3>Not here yet</h3>
+          <p class="gap">
+            Jupyter's plural commands — <kbd>⇧</kbd>+<kbd>j</kbd>/<kbd>k</kbd> to extend a
+            selection, <kbd>⌘</kbd>+<kbd>a</kbd> to select every cell — are missing, because
+            nothing here operates on more than one cell yet. There is no
+            <kbd>s</kbd> to save either: every edit is already a line in the
+            notebook's log.
+          </p>
+        </section>
+      </div>
+    </div>
   </div>
 
 </div>
 
 <script type="module">
-import { state, nbAPI, openNotebook, onChange } from "./nb.js";
+import { state, nbAPI, openNotebook, onChange, watchSessions, TOKEN } from "./nb.js";
 import { mountCells, showError } from "./nb_cells.js";
 import { escapeHTML } from "./nb_render.js";
 
-const picker = document.getElementById("nb-picker");
-const rootLabel = document.getElementById("nb-root");
+const list = document.getElementById("nb-list");
+const sessList = document.getElementById("nb-sessions");
+const sessLabel = document.getElementById("sess-label");
+const docTitle = document.getElementById("doc-title");
+const docRoot = document.getElementById("doc-root");
 
-async function refreshList(selectID) {
-  const list = await nbAPI.list();
-  // Titles are free-form user input and land in innerHTML, so they are
-  // escaped like every other rendered string. Unescaped, a title such as
-  // `"><img src=x onerror=...>` would run on every load of this page —
-  // with the auth token sitting in location.search.
-  picker.innerHTML = list.length
-    ? list
-        .map((n) => `<option value="${escapeHTML(n.id)}">${escapeHTML(n.title || n.id)}</option>`)
-        .join("")
-    : `<option value="">no notebooks yet</option>`;
-  const want = selectID || state.id || (list[0] && list[0].id);
-  if (want) {
-    picker.value = want;
-    if (want !== state.id) await openNotebook(want);
-  }
-  return list;
+let agents = [];
+
+// An "agent" here is a notebook: a working directory plus the document of
+// what has been done in it. The notebook is the durable thing and any
+// process is transient, which is the only ordering that survives a run
+// finishing — a PTY session dies with its process, a document should not.
+function renderSidebar() {
+  const cur = state.notebook;
+  list.innerHTML = agents.length
+    ? agents.map((a) => {
+        const live = cur && cur.id === a.id ? cur : null;
+        const st = live ? worstState(live) : "";
+        return `<div class="agent ${cur && cur.id === a.id ? "sel" : ""} ${st}" data-id="${escapeHTML(a.id)}">
+                  <span class="dot"></span>
+                  <div>
+                    <div class="name">${escapeHTML(a.title || a.id)}</div>
+                    <div class="meta">${escapeHTML(shortPath(a.root))} · ${a.cells} cell${a.cells === 1 ? "" : "s"}</div>
+                  </div>
+                </div>`;
+      }).join("")
+    : `<div class="side-label" style="text-transform:none;letter-spacing:0">No agents yet.</div>`;
+
+  list.querySelectorAll("[data-id]").forEach((el) =>
+    el.addEventListener("click", () => {
+      if (el.dataset.id === state.id) return;
+      state.selected = null;
+      openNotebook(el.dataset.id).catch(showError);
+    }),
+  );
+
+  document.getElementById("stat-agents").textContent = agents.length;
 }
 
-picker.addEventListener("change", () => {
-  if (picker.value) {
-    state.selected = null;
-    openNotebook(picker.value).catch(showError);
+// The sidebar dot shows the most notable thing happening in that notebook,
+// in the same order a person would care: running, then failed, then done.
+function worstState(nb) {
+  const s = (nb.cells || []).map((c) => c.state);
+  if (s.includes("running")) return "run";
+  if (s.includes("error")) return "err";
+  if (s.includes("ok")) return "ok";
+  return "";
+}
+
+// PTY sessions are a different kind of thing to a notebook — a running
+// process rather than a document — so they get their own section rather
+// than being flattened into one list. The notebook page only observes
+// them: spawning, answering prompts and the terminal itself still live in
+// the dashboard until M7.
+function renderSessions() {
+  const sess = state.sessions || [];
+  sessLabel.style.display = sess.length ? "" : "none";
+  sessList.innerHTML = sess.map((a) => {
+    const cls = { running: "run", waiting_input: "err", error: "err", idle: "ok", review_ready: "ok" }[a.status] || "";
+    // An agent waiting on you is the one thing here that needs action, so
+    // it is the one that says so rather than showing a status word.
+    const note = a.pending
+      ? "needs you"
+      : (a.currentTask || a.lastActivity || a.status || "");
+    return `<div class="agent session ${cls}" data-session="${escapeHTML(a.id)}"
+                 title="Open this session's terminal in the dashboard">
+              <span class="dot"></span>
+              <div>
+                <div class="name">${escapeHTML((a.cli || "agent") + " · " + a.id.slice(0, 8))}</div>
+                <div class="meta">${escapeHTML(String(note).slice(0, 44))}</div>
+              </div>
+            </div>`;
+  }).join("");
+
+  sessList.querySelectorAll("[data-session]").forEach((el) =>
+    el.addEventListener("click", () => {
+      // The terminal lives in the dashboard. Sending you there is honest;
+      // a second xterm in this page would be a copy that drifts.
+      window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${el.dataset.session}`, "_blank");
+    }),
+  );
+
+  document.getElementById("stat-running").textContent =
+    sess.filter((a) => a.status === "running").length;
+}
+
+function shortPath(p) {
+  if (!p) return "";
+  const home = "/home/";
+  if (p.startsWith(home)) {
+    const rest = p.slice(home.length).split("/").slice(1).join("/");
+    return "~/" + rest;
   }
-});
+  return p;
+}
+
+async function refreshList(selectID) {
+  agents = await nbAPI.list();
+  const want = selectID || state.id || (agents[0] && agents[0].id);
+  if (want && want !== state.id) await openNotebook(want);
+  renderSidebar();
+  return agents;
+}
 
 document.getElementById("nb-new").addEventListener("click", async () => {
-  const title = prompt("Notebook title", "Untitled notebook");
+  const title = prompt("Name this agent", "");
   if (title === null) return;
-  // The root is the working directory every cell runs in, and in M3 it
-  // becomes the boundary tools are contained to — so it is asked for
-  // explicitly rather than guessed.
+  // The working directory is asked for rather than guessed: it is what
+  // every shell cell runs in, and in M3 it becomes the boundary tools are
+  // contained to.
   const root = prompt("Working directory (absolute path)", state.notebook?.root || "");
   if (!root) return;
   try {
-    const created = await nbAPI.create(title, root);
+    const created = await nbAPI.create(title || "Untitled agent", root);
     state.selected = null;
     await refreshList(created.id);
   } catch (err) {
@@ -82,14 +250,16 @@ document.getElementById("nb-new").addEventListener("click", async () => {
 });
 
 onChange(() => {
-  rootLabel.textContent = state.notebook?.root || "";
-  if (state.notebook && picker.value !== state.notebook.id) {
-    picker.value = state.notebook.id;
-  }
+  const nb = state.notebook;
+  docTitle.textContent = nb?.title || "";
+  docRoot.textContent = nb?.root ? shortPath(nb.root) : "";
+  renderSidebar();
+  renderSessions();
 });
 
 mountCells(document.getElementById("nb-cells"));
 refreshList().catch(showError);
+watchSessions();
 </script>
 </body>
 </html>

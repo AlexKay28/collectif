@@ -1,271 +1,416 @@
-/* nb.css — notebook surface. #49 (M1 slice 3).
-   Palette follows the existing dashboard so the two surfaces read as one
-   product while the notebook is still a second route (it becomes the front
-   door in M7). */
+/* nb.css — the collectif notebook shell.
+   #49/#50, restructured after first contact with a user.
+   
+   Two ideas carry the whole design.
+   
+   ONE: the only colour in the notebook is state. Everything structural is
+   warm neutral grey and near-white ink, so the four things you actually
+   need to spot — running, done, failed, stale — are the only hues on the
+   page and cannot be missed. Selection is weight and a rule, never colour.
+   
+   TWO: a cell's source is either language or code, and the type says
+   which. Markdown and prompt cells are prose, set in a serif; shell cells
+   and every output are code, set in mono. The result reads as a document
+   with a terminal in it rather than a form full of boxes. */
 
 :root {
-  --nb-bg: #0e0f11;
-  --nb-panel: #15171a;
-  --nb-panel-2: #1b1e22;
-  --nb-rule: #24282e;
-  --nb-ink: #e6e6e6;
-  --nb-muted: #8b939f;
-  --nb-accent: #7aa2f7;
-  --nb-ok: #7fd88f;
-  --nb-warn: #e0af68;
-  --nb-err: #f7768e;
-  --nb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --nb-ground:   #100f0e;
+  --nb-panel:    #161513;
+  --nb-sunken:   #0b0a09;
+  --nb-rule:     #2b2825;
+  --nb-rule-soft:#201e1c;
+
+  --nb-ink:      #ece8e3;
+  --nb-dim:      #a29c94;
+  --nb-muted:    #6e6862;
+
+  /* The only hues on the page. */
+  --nb-ok:       #7fc98b;
+  --nb-run:      #e0a458;
+  --nb-err:      #ef7d72;
+  --nb-stale:    #8b90a8;
+
+  --nb-serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  --nb-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 * { box-sizing: border-box; }
 
 html, body {
-  margin: 0;
-  background: var(--nb-bg);
+  margin: 0; height: 100%;
+  background: var(--nb-ground);
   color: var(--nb-ink);
-  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.6 var(--nb-serif);
+  -webkit-font-smoothing: antialiased;
 }
 
-#nb-app { display: flex; flex-direction: column; min-height: 100vh; }
+#nb-app { display: grid; grid-template-rows: 46px 1fr; height: 100vh; }
 
-/* ── Header ─────────────────────────────────────────────────────── */
+/* ── Header ──────────────────────────────────────────────────────── */
 
 #nb-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  display: flex; align-items: center; gap: 18px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--nb-rule);
   background: var(--nb-panel);
-  position: sticky;
-  top: 0;
-  z-index: 5;
 }
 #nb-head h1 {
-  font: 600 15px/1 var(--nb-mono);
   margin: 0;
-  letter-spacing: -0.01em;
-}
-#nb-head .sp { flex: 1; }
-#nb-head select,
-#nb-head button,
-#nb-head input {
-  background: var(--nb-panel-2);
+  font: 600 12px/1 var(--nb-mono);
+  letter-spacing: .18em; text-transform: uppercase;
   color: var(--nb-ink);
-  border: 1px solid var(--nb-rule);
-  border-radius: 4px;
-  padding: 5px 9px;
-  font: 12px var(--nb-mono);
 }
-#nb-head button { cursor: pointer; }
-#nb-head button:hover { border-color: var(--nb-accent); color: var(--nb-accent); }
-#nb-root { color: var(--nb-muted); font: 11px var(--nb-mono); }
+#nb-head .stat {
+  font: 11px var(--nb-mono); color: var(--nb-muted);
+  display: flex; gap: 6px; align-items: baseline;
+}
+#nb-head .stat b { color: var(--nb-dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+#nb-head .sp { flex: 1; }
+#nb-head a { color: var(--nb-muted); font: 11px var(--nb-mono); text-decoration: none; }
+#nb-head a:hover { color: var(--nb-dim); }
 
 #nb-error {
-  display: none;
-  padding: 8px 16px;
-  background: rgba(247, 118, 142, 0.12);
-  border-bottom: 1px solid var(--nb-err);
-  color: var(--nb-err);
-  font: 12px var(--nb-mono);
+  display: none; grid-column: 1 / -1;
+  padding: 8px 18px;
+  font: 12px var(--nb-mono); color: var(--nb-err);
+  background: rgba(239,125,114,.08);
+  border-bottom: 1px solid rgba(239,125,114,.3);
+}
+/* Same bar, said calmly: a confirmation borrowing the error's red would
+   teach people to distrust the colour. */
+#nb-error.note {
+  color: var(--nb-dim);
+  background: rgba(236,232,227,.05);
+  border-bottom-color: var(--nb-rule);
 }
 
-/* ── Cells ──────────────────────────────────────────────────────── */
+/* ── Shell ───────────────────────────────────────────────────────── */
 
-#nb-cells {
-  padding: 20px 16px 120px;
-  max-width: 960px;
+#nb-main { display: grid; grid-template-columns: 292px 1fr; min-height: 0; }
+
+#nb-side {
+  border-right: 1px solid var(--nb-rule);
+  background: var(--nb-panel);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.side-label {
+  font: 10px var(--nb-mono); letter-spacing: .16em; text-transform: uppercase;
+  color: var(--nb-muted);
+  padding: 16px 16px 8px;
+}
+#nb-list { display: flex; flex-direction: column; }
+
+.agent {
+  display: grid;
+  grid-template-columns: 12px minmax(0,1fr);
+  gap: 9px;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.agent:hover { background: rgba(236,232,227,.03); }
+.agent.sel { background: rgba(236,232,227,.06); border-left-color: var(--nb-ink); }
+.agent .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--nb-muted); margin-top: 7px;
+}
+.agent.run .dot { background: var(--nb-run); }
+.agent.err .dot { background: var(--nb-err); }
+.agent.ok  .dot { background: var(--nb-ok); }
+.agent .name {
+  font: 14px/1.35 var(--nb-serif); color: var(--nb-ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent .meta {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: 2px;
+}
+
+.side-foot { margin-top: auto; padding: 12px 16px 16px; }
+.side-foot button {
   width: 100%;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  font: 11px var(--nb-mono); letter-spacing: .06em;
+  color: var(--nb-dim); background: transparent;
+  border: 1px dashed var(--nb-rule); border-radius: 3px;
+  padding: 9px; cursor: pointer;
 }
+.side-foot button:hover { color: var(--nb-ink); border-color: var(--nb-dim); border-style: solid; }
 
-.nb-empty, .nb-hint { color: var(--nb-muted); font-style: italic; }
+#nb-doc { overflow-y: auto; min-width: 0; }
+#nb-doc-head {
+  position: sticky; top: 0; z-index: 4;
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 20px 30px 14px;
+  background: linear-gradient(var(--nb-ground) 72%, transparent);
+}
+#nb-doc-head .title { font: 20px/1.2 var(--nb-serif); color: var(--nb-ink); }
+#nb-doc-head .root { font: 11px var(--nb-mono); color: var(--nb-muted); }
 
+#nb-cells { max-width: 860px; padding: 0 30px 200px; }
+.nb-empty { color: var(--nb-muted); font-style: italic; padding: 30px; }
+
+/* ── Cells ───────────────────────────────────────────────────────── */
+
+/* A margin note plus a body — a manuscript, not a card. */
 .nb-cell {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) 64px;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--nb-rule);
-  border-left: 3px solid transparent;
-  border-radius: 5px;
-  background: var(--nb-panel);
+  grid-template-columns: 58px minmax(0,1fr);
+  column-gap: 16px;
+  padding: 13px 0 17px;
+  border-top: 1px solid var(--nb-rule-soft);
+  position: relative;
 }
-.nb-cell.sel { border-left-color: var(--nb-accent); background: var(--nb-panel-2); }
-.nb-cell.state-running { border-left-color: var(--nb-warn); }
-.nb-cell.state-error { border-left-color: var(--nb-err); }
-.nb-cell.state-stale { border-left-color: var(--nb-muted); }
+.nb-cell:first-child { border-top: 0; }
+.nb-cell.sel::before {
+  content: ""; position: absolute;
+  left: -14px; top: 11px; bottom: 11px; width: 2px;
+  background: var(--nb-dim); border-radius: 1px;
+}
 
-.nb-gutter { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
-.nb-type {
-  font: 10px var(--nb-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--nb-muted);
+.nb-gutter {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+  padding-top: 2px; text-align: right; user-select: none;
 }
-.nb-chip {
-  font: 10px var(--nb-mono);
-  padding: 1px 6px;
-  border-radius: 3px;
-  border: 1px solid var(--nb-rule);
-  color: var(--nb-muted);
-}
-.chip-running { color: var(--nb-warn); border-color: var(--nb-warn); }
-.chip-ok { color: var(--nb-ok); border-color: rgba(127, 216, 143, 0.4); }
-.chip-error { color: var(--nb-err); border-color: var(--nb-err); }
-.chip-interrupted { color: var(--nb-warn); }
-.chip-stale { font-style: italic; }
+.nb-idx  { font: 11px var(--nb-mono); color: var(--nb-muted); font-variant-numeric: tabular-nums; }
+.nb-type { font: 9.5px var(--nb-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--nb-muted); }
+.nb-chip { font: 10px var(--nb-mono); letter-spacing: .03em; color: var(--nb-muted); }
+.chip-running { color: var(--nb-run); }
+.chip-ok { color: var(--nb-ok); }
+.chip-error { color: var(--nb-err); }
+.chip-interrupted { color: var(--nb-run); }
+.chip-stale { color: var(--nb-stale); font-style: italic; }
+.chip-cache { color: var(--nb-ok); }
+.chip-cache-cold { color: var(--nb-run); }
 
 .nb-body { min-width: 0; }
 
-.nb-src, .nb-src-view {
-  width: 100%;
-  font: 13px/1.5 var(--nb-mono);
-  background: #0b0c0e;
-  color: var(--nb-ink);
-  border: 1px solid var(--nb-rule);
-  border-radius: 4px;
-  padding: 8px 10px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.nb-src { resize: vertical; outline: none; }
-.nb-src:focus { border-color: var(--nb-accent); }
-
+/* Prose: markdown source, rendered. */
+.nb-md { font: 16px/1.62 var(--nb-serif); max-width: 66ch; }
 .nb-md > :first-child { margin-top: 0; }
 .nb-md > :last-child { margin-bottom: 0; }
-.nb-md h1, .nb-md h2, .nb-md h3 { line-height: 1.25; margin: 12px 0 8px; }
-.nb-md h1 { font-size: 22px; }
-.nb-md h2 { font-size: 18px; }
-.nb-md h3 { font-size: 15px; }
-.nb-md code { font: 12px var(--nb-mono); background: #0b0c0e; padding: 1px 5px; border-radius: 3px; }
+.nb-md h1 { font: 600 25px/1.2 var(--nb-serif); margin: 2px 0 12px; }
+.nb-md h2 { font: 600 20px/1.25 var(--nb-serif); margin: 20px 0 9px; }
+.nb-md h3 { font: 600 17px/1.3 var(--nb-serif); margin: 16px 0 7px; }
+.nb-md p { margin: 0 0 12px; }
+.nb-md ul, .nb-md ol { margin: 0 0 12px; padding-left: 22px; }
+.nb-md li { margin-bottom: 4px; }
+.nb-md li::marker { color: var(--nb-muted); }
+.nb-md a { color: var(--nb-ink); text-decoration: underline; text-underline-offset: 2px; }
+.nb-md code { font: 13.5px var(--nb-mono); background: var(--nb-sunken); padding: 1px 5px; border-radius: 3px; }
 .nb-md pre.code {
-  font: 12px/1.5 var(--nb-mono);
-  background: #0b0c0e;
-  border: 1px solid var(--nb-rule);
-  border-radius: 4px;
-  padding: 10px;
-  overflow-x: auto;
+  font: 13px/1.55 var(--nb-mono); background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule-soft); border-radius: 4px;
+  padding: 11px 13px; overflow-x: auto;
 }
-.nb-md a { color: var(--nb-accent); }
-.nb-md hr { border: 0; border-top: 1px solid var(--nb-rule); }
+.nb-md hr { border: 0; border-top: 1px solid var(--nb-rule); margin: 18px 0; }
 
-.out {
-  font: 12px/1.5 var(--nb-mono);
-  background: #0b0c0e;
-  border: 1px solid var(--nb-rule);
-  border-radius: 4px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 420px;
-  overflow: auto;
+/* A prompt is language too, but an instruction rather than a document —
+   so it is quoted rather than set as body text. */
+.nb-src-view.prose {
+  font: 16px/1.6 var(--nb-serif); color: var(--nb-ink);
+  background: transparent; border: 0;
+  border-left: 2px solid var(--nb-rule);
+  border-radius: 0; padding: 1px 0 1px 14px; max-width: 66ch;
 }
-.out.err { color: var(--nb-err); border-color: rgba(247, 118, 142, 0.35); }
-.out.stream { border-color: rgba(224, 175, 104, 0.35); }
+/* Code: shell source. */
+.nb-src-view {
+  font: 13.5px/1.55 var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule-soft); border-radius: 4px;
+  padding: 10px 12px; margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+.nb-src {
+  width: 100%;
+  font: 13.5px/1.55 var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule); border-radius: 4px;
+  padding: 10px 12px; resize: vertical; outline: none;
+}
+.nb-src.prose { font: 15.5px/1.6 var(--nb-serif); }
+.nb-src:focus { border-color: var(--nb-dim); }
+.nb-hint { color: var(--nb-muted); font-style: italic; }
+
+/* ── Output ──────────────────────────────────────────────────────── */
+
+/* Subordinate to source: inset, quieter, marked by a rule in the state
+   colour so a glance down the page tells you what worked. */
+.out {
+  font: 12.5px/1.55 var(--nb-mono); color: var(--nb-dim);
+  background: transparent;
+  border: 0; border-left: 2px solid var(--nb-rule);
+  border-radius: 0; margin: 10px 0 0; padding: 2px 0 2px 13px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 440px; overflow: auto;
+}
+.state-ok .out { border-left-color: rgba(127,201,139,.45); }
+.state-running .out { border-left-color: var(--nb-run); }
+.state-error .out, .out.err { border-left-color: var(--nb-err); color: #f2b3ad; }
+.state-stale .out { opacity: .5; }
 
 .caret {
-  display: inline-block;
-  width: 7px;
-  height: 13px;
-  background: var(--nb-warn);
-  vertical-align: text-bottom;
-  animation: nb-blink 1s step-end infinite;
+  display: inline-block; width: 7px; height: 13px;
+  background: var(--nb-run); vertical-align: text-bottom;
+  animation: nb-blink 1.05s step-end infinite;
 }
 @keyframes nb-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
 
-.out.diff .d-add { color: var(--nb-ok); display: block; }
-.out.diff .d-del { color: var(--nb-err); display: block; }
-.out.diff .d-hunk { color: var(--nb-accent); display: block; }
-.out.diff .d-file { color: var(--nb-muted); display: block; }
-.out.diff .d-ctx { display: block; }
-
-.nb-actions { display: flex; gap: 6px; align-items: flex-start; justify-content: flex-end; }
-.nb-actions button {
-  background: transparent;
-  border: 1px solid var(--nb-rule);
-  color: var(--nb-muted);
-  border-radius: 4px;
-  width: 26px;
-  height: 26px;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-}
-.nb-actions button:hover { color: var(--nb-accent); border-color: var(--nb-accent); }
-
-.nb-add-row { display: flex; gap: 8px; padding-top: 4px; }
-.nb-add-row button {
-  background: var(--nb-panel);
-  border: 1px dashed var(--nb-rule);
-  color: var(--nb-muted);
-  border-radius: 4px;
-  padding: 6px 12px;
-  font: 12px var(--nb-mono);
-  cursor: pointer;
-}
-.nb-add-row button:hover { color: var(--nb-accent); border-color: var(--nb-accent); }
-
-#nb-keys {
-  position: fixed;
-  right: 14px;
-  bottom: 12px;
-  font: 10.5px/1.7 var(--nb-mono);
-  color: var(--nb-muted);
-  background: var(--nb-panel);
-  border: 1px solid var(--nb-rule);
-  border-radius: 5px;
-  padding: 8px 11px;
-  opacity: 0.75;
-}
-#nb-keys b { color: var(--nb-ink); font-weight: 600; }
-
-:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
-
-/* #50 — agent-loop outputs: reasoning, tool calls, tool results. */
-.out.think { padding: 0; background: transparent; border-color: transparent; }
+.out.think { border-left-color: var(--nb-rule); padding: 0 0 0 13px; }
 .out.think > summary {
-  cursor: pointer;
-  font: 11px var(--nb-mono);
-  color: var(--nb-muted);
-  padding: 4px 0;
-  list-style: none;
+  cursor: pointer; list-style: none;
+  font: 10.5px var(--nb-mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--nb-muted); padding: 3px 0;
 }
 .out.think > summary::before { content: "▸ "; }
 .out.think[open] > summary::before { content: "▾ "; }
-.out.think > pre {
-  font: 12px/1.5 var(--nb-mono);
-  color: var(--nb-muted);
-  background: #0b0c0e;
-  border: 1px solid var(--nb-rule);
-  border-radius: 4px;
-  padding: 8px 10px;
-  margin: 0 0 4px;
-  white-space: pre-wrap;
-}
-.out.tool {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  font: 12px var(--nb-mono);
-  background: transparent;
-  border: 0;
-  border-left: 2px solid var(--nb-accent);
-  border-radius: 0;
-  padding: 4px 0 4px 10px;
-  margin: 8px 0 0;
-}
-.out.tool .tool-name { color: var(--nb-accent); }
+.out.think > pre { margin: 0 0 6px; font: 12.5px/1.55 var(--nb-mono); color: var(--nb-muted); white-space: pre-wrap; }
+.out.tool { display: flex; gap: 9px; align-items: baseline; font: 12px var(--nb-mono); border-left-color: var(--nb-dim); color: var(--nb-ink); }
 .out.tool .tool-args { color: var(--nb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.out.toolres { border-left: 2px solid var(--nb-rule); border-radius: 0 4px 4px 0; }
+.out.diff .d-add { color: var(--nb-ok); display: block; }
+.out.diff .d-del { color: var(--nb-err); display: block; }
+.out.diff .d-hunk { color: var(--nb-dim); display: block; }
+.out.diff .d-file { color: var(--nb-muted); display: block; }
+.out.diff .d-ctx { display: block; }
 
-/* #51 — cache-hit readout. Zero is a signal, not a neutral fact: on a
-   re-run it means the projected prefix stopped matching. */
-.chip-cache { color: var(--nb-ok); border-color: rgba(127, 216, 143, 0.35); }
-.chip-cache-cold { color: var(--nb-warn); border-color: var(--nb-warn); }
+/* A failure that belongs to a cell is shown on that cell and stays until
+   dismissed. A toast at the top of the page for a cell further down is how
+   pressing run reads as nothing happening at all. */
+.cell-error {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 10px 0 0; padding: 9px 13px;
+  border-left: 2px solid var(--nb-err);
+  background: rgba(239,125,114,.07);
+  font: 12.5px/1.5 var(--nb-mono); color: #f2b3ad;
+}
+.cell-error .x {
+  margin-left: auto; background: none; border: 0;
+  color: var(--nb-muted); cursor: pointer; font: 12px var(--nb-mono); padding: 0 2px;
+}
+.cell-error .x:hover { color: var(--nb-ink); }
+
+/* ── Actions ─────────────────────────────────────────────────────── */
+
+/* Hidden until hover or selection: a document should not be covered in
+   buttons. */
+.nb-actions {
+  position: absolute; right: 0; top: 11px;
+  display: flex; gap: 4px; opacity: 0; transition: opacity .12s ease;
+}
+.nb-cell:hover .nb-actions, .nb-cell.sel .nb-actions { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .nb-actions { transition: none; } }
+.nb-actions button {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  font: 11px var(--nb-mono); color: var(--nb-muted);
+  background: var(--nb-panel); border: 1px solid var(--nb-rule);
+  border-radius: 3px; cursor: pointer;
+}
+.nb-actions button:hover { color: var(--nb-ink); border-color: var(--nb-dim); }
+
+.nb-add-row { display: flex; gap: 8px; padding: 20px 0 0 74px; }
+.nb-add-row button {
+  font: 11px var(--nb-mono); letter-spacing: .06em;
+  color: var(--nb-muted); background: transparent;
+  border: 1px dashed var(--nb-rule); border-radius: 3px;
+  padding: 6px 12px; cursor: pointer;
+}
+.nb-add-row button:hover { color: var(--nb-ink); border-color: var(--nb-dim); border-style: solid; }
+
+/* The shortcut hint shrank to one line once `h` opened a real map: three
+   lines of crib sheet permanently in the corner is a sign the help is
+   undiscoverable, not a feature. */
+#nb-keys {
+  position: fixed; right: 16px; bottom: 14px;
+  font: 10.5px/1 var(--nb-mono); color: var(--nb-muted);
+  background: rgba(22,21,19,.92); border: 1px solid var(--nb-rule);
+  border-radius: 4px; padding: 7px 11px; cursor: pointer;
+}
+#nb-keys:hover { color: var(--nb-dim); border-color: var(--nb-dim); }
+#nb-keys b { color: var(--nb-dim); font-weight: 400; }
+
+/* ── Keyboard map ────────────────────────────────────────────────── */
+
+#nb-help {
+  display: none;
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(8,7,6,.72);
+  padding: 48px 24px; overflow: auto;
+}
+#nb-help.open { display: block; }
+
+#nb-help .sheet {
+  max-width: 1000px; margin: 0 auto;
+  background: var(--nb-panel);
+  border: 1px solid var(--nb-rule); border-radius: 6px;
+  padding: 22px 26px 26px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.5);
+}
+#nb-help header {
+  display: flex; align-items: baseline; gap: 14px;
+  border-bottom: 1px solid var(--nb-rule); padding-bottom: 12px; margin-bottom: 18px;
+}
+#nb-help h2 {
+  margin: 0; font: 400 17px var(--nb-serif); color: var(--nb-ink);
+  letter-spacing: .01em;
+}
+#nb-help .hint { font: 11px var(--nb-mono); color: var(--nb-muted); }
+#nb-help .hint b { color: var(--nb-dim); font-weight: 400; }
+
+#nb-help .cols {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 34px;
+}
+#nb-help h3 {
+  margin: 0 0 8px; font: 400 10px var(--nb-mono); color: var(--nb-muted);
+  text-transform: uppercase; letter-spacing: .14em;
+}
+#nb-help section > h3 + dl { margin-bottom: 20px; }
+#nb-help dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 5px 14px;
+  margin: 0 0 20px; align-items: baseline;
+}
+#nb-help dt { white-space: nowrap; }
+#nb-help dd { margin: 0; font: 12.5px/1.4 var(--nb-serif); color: var(--nb-dim); }
+#nb-help .or { color: var(--nb-muted); font: 10px var(--nb-mono); margin: 0 1px; }
+
+#nb-help kbd {
+  display: inline-block;
+  font: 10.5px var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken); border: 1px solid var(--nb-rule);
+  border-bottom-width: 2px; border-radius: 3px;
+  padding: 2px 5px; min-width: 9px; text-align: center;
+}
+#nb-help .gap {
+  margin: 0; font: italic 12px/1.6 var(--nb-serif); color: var(--nb-muted);
+}
+#nb-help .gap kbd { font-style: normal; }
+
+@media (max-width: 820px) {
+  #nb-help .cols { grid-template-columns: 1fr; }
+}
+
+:focus-visible { outline: 1px solid var(--nb-dim); outline-offset: 3px; }
+
+@media (max-width: 900px) {
+  #nb-main { grid-template-columns: 1fr; }
+  #nb-side { display: none; }
+  #nb-keys { display: none; }
+}
+
+/* Running PTY sessions. Same row shape as a notebook so the sidebar reads
+   as one list, but visually quieter: a session is something happening
+   elsewhere that you can look in on, not the document you are working in. */
+.agent.session .name { font: 12px var(--nb-mono); color: var(--nb-dim); }
+.agent.session .meta { font-style: italic; }
+.agent.session:hover .name { color: var(--nb-ink); }
+
+
+/* o / ⇧o. Collapsed output leaves a line you can click, because a cell
+   whose output silently vanished looks broken rather than folded. */
+.out.collapsed {
+  font: 11px var(--nb-mono); color: var(--nb-muted);
+  padding: 6px 0; cursor: pointer;
+}
+.out.collapsed:hover { color: var(--nb-dim); }
+.nb-body.tall .out { max-height: none; }

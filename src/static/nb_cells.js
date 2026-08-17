@@ -11,14 +11,23 @@ import { state, nbAPI, onChange } from "./nb.js";
 import { renderMarkdown, renderOutputs, escapeHTML } from "./nb_render.js";
 
 const CELL_TYPES = ["markdown", "shell", "prompt", "file"];
+export { CELL_TYPES };
 
 let root;
-let pendingDD = false;
 
 export function mountCells(el) {
   root = el;
   onChange(render);
   document.addEventListener("keydown", onKeyDown);
+
+  const help = document.getElementById("nb-help");
+  // Click the backdrop to dismiss, but not the sheet itself — a stray
+  // click while reading the map should not close it.
+  help?.addEventListener("click", (e) => {
+    if (e.target === help) toggleHelp(false);
+  });
+  document.getElementById("nb-keys")?.addEventListener("click", () => toggleHelp(true));
+
   render();
 }
 
@@ -39,7 +48,7 @@ function render() {
   const selEnd = active?.selectionEnd;
 
   root.innerHTML =
-    (nb.cells || []).map(renderCell).join("") +
+    (nb.cells || []).map((c, i) => renderCell(c, i + 1)).join("") +
     `<div class="nb-add-row">
        <button data-add="markdown">+ Markdown</button>
        <button data-add="shell">+ Shell</button>
@@ -60,40 +69,54 @@ function cssEscape(s) {
   return String(s).replace(/["\\]/g, "\\$&");
 }
 
-function renderCell(cell) {
+// A cell is a margin note plus a body. Which typeface the source gets is
+// not decoration: markdown and prompt sources are language and set in a
+// serif, shell sources and every output are code and set in mono. The page
+// then reads as a document with a terminal in it.
+function renderCell(cell, index) {
   const selected = cell.id === state.selected;
   const editing = selected && state.mode === "edit";
+  const prose = cell.type === "markdown" || cell.type === "prompt";
   const live = state.live.get(cell.id);
-  const outputs = renderOutputs(cell, live);
+  const hidden = state.hiddenOutputs.has(cell.id);
+  const tall = state.tallOutputs.has(cell.id);
+  const outputs = hidden
+    ? (cell.outputs || []).length || live
+      ? `<div class="out collapsed" data-show="${escapeHTML(cell.id)}">output hidden — press o to show</div>`
+      : ""
+    : renderOutputs(cell, live);
+  const failed = state.cellErrors.get(cell.id);
 
+  const rows = Math.max(2, String(cell.source || "").split("\n").length);
   const body = editing
-    ? `<textarea class="nb-src" data-cell-id="${escapeHTML(cell.id)}" spellcheck="false"
-         rows="${Math.max(2, String(cell.source || "").split("\n").length)}">${escapeHTML(cell.source || "")}</textarea>`
+    ? `<textarea class="nb-src ${prose ? "prose" : ""}" data-cell-id="${escapeHTML(cell.id)}"
+         spellcheck="false" rows="${rows}">${escapeHTML(cell.source || "")}</textarea>`
     : cell.type === "markdown"
-      ? `<div class="nb-md">${renderMarkdown(cell.source) || '<p class="nb-hint">Empty markdown cell — press Enter to edit.</p>'}</div>`
-      : `<pre class="nb-src-view">${escapeHTML(cell.source || "") || '<span class="nb-hint">Empty — press Enter to edit.</span>'}</pre>`;
+      ? `<div class="nb-md">${renderMarkdown(cell.source) || '<p class="nb-hint">Empty — press Enter to edit.</p>'}</div>`
+      : `<pre class="nb-src-view ${prose ? "prose" : ""}">${escapeHTML(cell.source || "") || '<span class="nb-hint">Empty — press Enter to edit.</span>'}</pre>`;
 
-  // #50: prompt cells run through the agent loop now.
   const runnable = cell.type === "shell" || cell.type === "prompt";
   const running = cell.state === "running";
 
   return `
-  <div class="nb-cell ${selected ? "sel" : ""} ${editing ? "editing" : ""} state-${escapeHTML(cell.state || "idle")}"
+  <div class="nb-cell ${selected ? "sel" : ""} state-${escapeHTML(cell.state || "idle")}"
        data-cell="${escapeHTML(cell.id)}">
     <div class="nb-gutter">
+      <span class="nb-idx">${index}</span>
       <span class="nb-type">${escapeHTML(cell.type)}</span>
       ${stateChip(cell)}
       ${cacheChip(cell)}
     </div>
-    <div class="nb-body">
+    <div class="nb-body ${tall ? "tall" : ""}">
       ${body}
       ${outputs}
+      ${failed ? `<div class="cell-error"><span>${escapeHTML(failed)}</span><button class="x" data-dismiss="${escapeHTML(cell.id)}" title="Dismiss">✕</button></div>` : ""}
     </div>
     <div class="nb-actions">
       ${running
-        ? `<button data-interrupt="${escapeHTML(cell.id)}" title="Interrupt">■</button>`
+        ? `<button data-interrupt="${escapeHTML(cell.id)}" title="Stop (i)">■</button>`
         : runnable
-          ? `<button data-run="${escapeHTML(cell.id)}" title="Run (Shift+Enter)">▶</button>`
+          ? `<button data-run="${escapeHTML(cell.id)}" title="Run (⇧Enter)">▶</button>`
           : ``}
       <button data-del="${escapeHTML(cell.id)}" title="Delete (dd)">✕</button>
     </div>
@@ -106,6 +129,7 @@ function stateChip(cell) {
   const label = {
     running: "running",
     ok: okLabel(cell),
+    idle: "",
     error: "error",
     interrupted: "interrupted",
     stale: "stale",
@@ -189,6 +213,19 @@ function wire() {
       deleteCell(b.dataset.del);
     }),
   );
+  root.querySelectorAll("[data-show]").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.hiddenOutputs.delete(el.dataset.show);
+      render();
+    }),
+  );
+  root.querySelectorAll("[data-dismiss]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.cellErrors.delete(b.dataset.dismiss);
+      render();
+    }),
+  );
   root.querySelectorAll("[data-add]").forEach((b) =>
     b.addEventListener("click", () => insertCell(b.dataset.add, {})),
   );
@@ -242,6 +279,12 @@ async function insertCell(type, pos = {}) {
 async function deleteCell(id) {
   const cells = state.notebook?.cells || [];
   const i = cells.findIndex((c) => c.id === id);
+  // Remember it for z. Position is recorded as "before the cell that
+  // followed", which survives other edits better than an index.
+  if (i >= 0) {
+    state.trash.push({ cell: { ...cells[i] }, before: cells[i + 1]?.id || "" });
+    if (state.trash.length > 20) state.trash.shift();
+  }
   // Resolve the neighbour *before* awaiting. The server broadcasts inside
   // Append, before it writes the HTTP response, so the cell_deleted event
   // usually lands first and splices this very array — reading it afterwards
@@ -258,145 +301,319 @@ async function deleteCell(id) {
 async function runCell(id) {
   const cell = findCell(id);
   if (!cell) return;
+  state.cellErrors.delete(id);
   try {
     await nbAPI.runCell(state.id, id);
   } catch (err) {
-    // A prompt or file cell answers 501 until M2. Say so plainly rather
-    // than failing silently.
+    // Show it on the cell, not as a toast at the top of the page. The
+    // request is rejected before any event is written, so without this
+    // the cell does not change at all and pressing run looks like a
+    // no-op — which is exactly how it read the first time someone tried
+    // a prompt cell with no provider configured.
+    state.cellErrors.set(id, String(err && err.message ? err.message : err));
+    render();
+  }
+}
+
+// selectNext advances to the cell below, appending one at the end — this
+// is what makes ⇧↩ walk a notebook and leave you somewhere to type.
+function selectNext() {
+  const cells = state.notebook?.cells || [];
+  const i = selectedIndex();
+  if (i >= 0 && i < cells.length - 1) {
+    state.selected = cells[i + 1].id;
+    return;
+  }
+  insertCell("shell", {});
+}
+
+// Markdown has nothing to run — in Jupyter, "running" it is rendering it,
+// which here happens the moment you leave the editor. Calling run on one
+// would be a 400 the user did not ask for.
+function runIfRunnable(id) {
+  const cell = findCell(id);
+  if (!cell) return;
+  if (cell.type === "shell" || cell.type === "prompt") runCell(id);
+}
+
+async function setType(id, type) {
+  const cell = findCell(id);
+  if (!cell || cell.type === type) return;
+  cell.type = type; // optimistic; the event confirms it
+  render();
+  try {
+    await nbAPI.setCellType(state.id, id, type);
+  } catch (err) {
     showError(err);
   }
 }
 
 // ─── Keyboard ─────────────────────────────────────────────────────────
+//
+// Jupyter's shortcut set, taken from the documented tables rather than
+// from memory, and mapped onto this notebook's cell types. The mapping
+// rules:
+//
+//   y → shell    Jupyter's "code" cell; ours is the one that executes.
+//   m → markdown unchanged.
+//   p → prompt   Jupyter has no equivalent, and its `r` (raw) has no
+//                meaning here, so a new letter rather than a stolen one.
+//   f → file     same reasoning; `f` is find/replace in Jupyter, which we
+//                do not have yet — noted as a conflict to revisit.
+//
+// Deliberately absent: 1-6 (headings — markdown already does that),
+// l (line numbers — no editor gutter), 0,0 (restart kernel — no kernel),
+// and everything that acts on *multiple* selected cells (⇧j/⇧k/⌘a).
+// Multi-select is a real gap rather than an oversight: half of Jupyter's
+// command mode is plural, and faking it single-cell would be worse than
+// leaving it out.
+
+// Chords like `d d` and `i i` need a pending first key that expires, or a
+// `d` typed a minute ago would arm a delete.
+let pendingKey = null;
+let pendingAt = 0;
+const CHORD_MS = 1200;
+
+function chord(key) {
+  const now = Date.now();
+  if (pendingKey === key && now - pendingAt < CHORD_MS) {
+    pendingKey = null;
+    return true;
+  }
+  pendingKey = key;
+  pendingAt = now;
+  return false;
+}
 
 function onEditorKeyDown(e) {
   const ta = e.currentTarget;
-  if (e.key === "Escape") {
+  const id = ta.dataset.cellId;
+
+  // ⌃m and Esc both leave for command mode.
+  if (e.key === "Escape" || (e.key === "m" && e.ctrlKey)) {
     e.preventDefault();
+    commit(ta).then(() => { state.mode = "command"; ta.blur(); render(); });
+    return;
+  }
+  if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)) {
+    e.preventDefault();
+    const alt = e.altKey, shift = e.shiftKey;
     commit(ta).then(() => {
       state.mode = "command";
-      ta.blur();
+      runIfRunnable(id);
+      if (alt) insertCell("shell", { afterCellId: id });
+      else if (shift) selectNext();
       render();
     });
     return;
   }
-  if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+  // ⌃⇧- splits the cell at the cursor.
+  if (e.key === "_" && e.ctrlKey && e.shiftKey) {
     e.preventDefault();
-    const id = ta.dataset.cellId;
-    commit(ta).then(() => {
-      state.mode = "command";
-      runIfRunnable(id);
-      if (e.shiftKey) selectNext();
-      render();
-    });
+    splitCell(ta);
+    return;
   }
+  // Tab indents rather than moving focus out of the editor, and ⌘]/⌘[
+  // do the same explicitly.
+  if (e.key === "Tab" && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    indentSelection(ta, e.shiftKey ? -1 : 1);
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && (e.key === "]" || e.key === "[")) {
+    e.preventDefault();
+    indentSelection(ta, e.key === "]" ? 1 : -1);
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+    e.preventDefault();
+    announceSaved();
+  }
+}
+
+function indentSelection(ta, dir) {
+  const { selectionStart: a, selectionEnd: b, value } = ta;
+  const startLine = value.lastIndexOf("\n", a - 1) + 1;
+  const block = value.slice(startLine, b);
+  const next = dir > 0
+    ? block.replace(/^/gm, "  ")
+    : block.replace(/^ {1,2}/gm, "");
+  ta.value = value.slice(0, startLine) + next + value.slice(b);
+  ta.setSelectionRange(startLine, startLine + next.length);
+}
+
+async function splitCell(ta) {
+  const id = ta.dataset.cellId;
+  const cell = findCell(id);
+  if (!cell) return;
+  const at = ta.selectionStart;
+  const head = ta.value.slice(0, at);
+  const tail = ta.value.slice(at);
+  try {
+    await nbAPI.editCell(state.id, id, { source: head });
+    const res = await nbAPI.addCell(state.id, { type: cell.type, source: tail, afterCellId: id });
+    state.selected = res.cellId;
+    state.mode = "edit";
+  } catch (err) { showError(err); }
 }
 
 function onKeyDown(e) {
   if (!state.notebook) return;
+
+  // The help overlay closes on Esc or q, matching Jupyter's pager.
+  if (helpOpen()) {
+    if (e.key === "Escape" || e.key === "q") { e.preventDefault(); toggleHelp(false); }
+    return;
+  }
   if (state.mode === "edit") return;
   const tag = document.activeElement?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-  // Jupyter binds the unmodified keys only. Without this, Cmd/Ctrl+A
-  // inserts a cell instead of selecting all, Cmd/Ctrl+D arms dd, and
-  // Cmd+J/Cmd+K are swallowed as navigation.
-  if (e.altKey || e.metaKey || (e.ctrlKey && e.key !== "Enter")) return;
-
+  // Jupyter binds the unmodified keys in command mode. Without this,
+  // ⌘/Ctrl+A selects a cell instead of selecting all, and ⌘K/⌘J are
+  // swallowed as navigation.
+  const plain = !e.altKey && !e.metaKey && !e.ctrlKey;
   const cells = state.notebook.cells || [];
   const i = selectedIndex();
+  const id = state.selected;
+  const done = () => { e.preventDefault(); render(); };
 
-  const handled = () => {
-    e.preventDefault();
-    render();
-  };
+  // Run verbs carry modifiers, so they are handled before the plain-key
+  // guard rejects them.
+  if (e.key === "Enter") {
+    if (e.shiftKey) { if (id) runIfRunnable(id); selectNext(); return done(); }
+    if (e.ctrlKey || e.metaKey) { if (id) runIfRunnable(id); return done(); }
+    if (e.altKey) { if (id) runIfRunnable(id); insertCell("shell", { afterCellId: id }); return done(); }
+    if (id) { state.mode = "edit"; return done(); }
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); announceSaved(); return; }
+  if (!plain) return;
 
-  if (e.key !== "d") pendingDD = false;
+  if (e.key !== "d" && e.key !== "i") pendingKey = null;
 
   switch (e.key) {
-    case "Enter":
-      if (e.shiftKey || e.ctrlKey || e.metaKey) {
-        if (state.selected) runIfRunnable(state.selected);
-        if (e.shiftKey) selectNext();
-        return handled();
-      }
-      if (state.selected) {
-        state.mode = "edit";
-        return handled();
-      }
-      return;
-    case "j":
-    case "ArrowDown":
+    // ── selection ──
+    case "j": case "ArrowDown":
       if (i >= 0 && i < cells.length - 1) state.selected = cells[i + 1].id;
-      return handled();
-    case "k":
-    case "ArrowUp":
+      return done();
+    case "k": case "ArrowUp":
       if (i > 0) state.selected = cells[i - 1].id;
-      return handled();
-    case "a":
-      insertCell("shell", state.selected ? { beforeCellId: state.selected } : {});
-      return handled();
-    case "b":
-      insertCell("shell", state.selected ? { afterCellId: state.selected } : {});
-      return handled();
-    case "m":
-      if (state.selected) setType(state.selected, "markdown");
-      return handled();
-    case "y":
-      if (state.selected) setType(state.selected, "shell");
-      return handled();
-    case "d":
-      if (pendingDD) {
-        pendingDD = false;
-        if (state.selected) deleteCell(state.selected);
-        return handled();
-      }
-      pendingDD = true;
-      return;
+      return done();
+
+    // ── structure ──
+    case "a": insertCell("shell", id ? { beforeCellId: id } : {}); return done();
+    case "b": insertCell("shell", id ? { afterCellId: id } : {}); return done();
+    case "d": if (chord("d") && id) deleteCell(id); return done();
+    case "z": undoDelete(); return done();
+    case "x": if (id) { copyCell(id); deleteCell(id); } return done();
+    case "c": if (id) copyCell(id); return done();
+    case "v": pasteCell(e.shiftKey ? "before" : "after"); return done();
+    case "M": if (id) mergeBelow(id); return done(); // shift+m
+
+    // ── cell type ──
+    case "m": if (id) setType(id, "markdown"); return done();
+    case "y": if (id) setType(id, "shell"); return done();
+    case "p": if (id) setType(id, "prompt"); return done();
+    case "f": if (id) setType(id, "file"); return done();
+
+    // ── output ──
+    case "o": if (id) { toggleSet(state.hiddenOutputs, id); } return done();
+    case "O": if (id) { toggleSet(state.tallOutputs, id); } return done(); // shift+o
+
+    // ── kernel-ish ──
     case "i":
-      if (state.selected) nbAPI.interruptCell(state.id, state.selected).catch(() => {});
-      return handled();
+      if (chord("i") && id) nbAPI.interruptCell(state.id, id).catch(() => {});
+      return done();
+
+    // ── help ──
+    case "h": toggleHelp(true); return done();
+    case "s": announceSaved(); return done();
     default:
       return;
   }
 }
 
-// setType is a delete-and-reinsert: cell type is immutable in the schema
-// because an event that changed it would leave outputs from a different
-// kind of run attached.
-async function setType(id, type) {
+function toggleSet(set, id) { set.has(id) ? set.delete(id) : set.add(id); }
+
+function copyCell(id) {
+  const c = findCell(id);
+  if (c) state.clipboard = { type: c.type, source: c.source };
+}
+
+async function pasteCell(where) {
+  if (!state.clipboard) return;
+  const pos = state.selected
+    ? (where === "before" ? { beforeCellId: state.selected } : { afterCellId: state.selected })
+    : {};
+  try {
+    const res = await nbAPI.addCell(state.id, {
+      type: state.clipboard.type, source: state.clipboard.source, ...pos,
+    });
+    state.selected = res.cellId;
+  } catch (err) { showError(err); }
+}
+
+// z restores the most recently deleted cell. The document is an
+// append-only log, so this is a re-insert rather than a rewind — the
+// deletion stays in the history, which is the honest thing for a log.
+async function undoDelete() {
+  const last = state.trash.pop();
+  if (!last) return;
+  try {
+    const res = await nbAPI.addCell(state.id, {
+      type: last.cell.type, source: last.cell.source,
+      ...(last.before ? { beforeCellId: last.before } : {}),
+    });
+    state.selected = res.cellId;
+  } catch (err) { showError(err); }
+}
+
+async function mergeBelow(id) {
   const cells = state.notebook.cells || [];
   const i = cells.findIndex((c) => c.id === id);
-  if (i < 0 || cells[i].type === type) return;
-  const source = cells[i].source;
+  if (i < 0 || i === cells.length - 1) return;
+  const below = cells[i + 1];
   try {
-    // Insert in front of the cell being replaced, so the replacement lands
-    // exactly where the original was. Anchoring to the previous cell sent
-    // the first cell of a notebook to the bottom — movement the user never
-    // asked for, and not undoable.
-    const res = await nbAPI.addCell(state.id, { type, source, beforeCellId: id });
-    await nbAPI.deleteCell(state.id, id);
-    state.selected = res.cellId;
-  } catch (err) {
-    showError(err);
-  }
+    await nbAPI.editCell(state.id, id, {
+      source: `${cells[i].source}\n${below.source}`,
+    });
+    await nbAPI.deleteCell(state.id, below.id);
+    state.selected = id;
+  } catch (err) { showError(err); }
 }
 
-function runIfRunnable(id) {
-  const cell = findCell(id);
-  if (cell && cell.type !== "markdown") runCell(id);
+function announceSaved() {
+  // Every change is already a line in the log — there is nothing to save
+  // and nothing to lose. Saying so is better than binding the key to
+  // nothing and letting it feel broken.
+  showNote("Saved continuously — every edit is already in the notebook's log.");
 }
 
-function selectNext() {
-  const cells = state.notebook.cells || [];
-  const i = selectedIndex();
-  if (i >= 0 && i < cells.length - 1) state.selected = cells[i + 1].id;
+function helpOpen() {
+  return document.getElementById("nb-help")?.classList.contains("open");
+}
+
+export function toggleHelp(open) {
+  const el = document.getElementById("nb-help");
+  if (el) el.classList.toggle("open", open);
+}
+
+export function showNote(text) {
+  const bar = document.getElementById("nb-error");
+  if (!bar) return;
+  bar.textContent = text;
+  bar.classList.add("note");
+  bar.style.display = "";
+  clearTimeout(showError._t);
+  showError._t = setTimeout(() => { bar.style.display = "none"; bar.classList.remove("note"); }, 3500);
 }
 
 export function showError(err) {
   const bar = document.getElementById("nb-error");
   if (!bar) return;
   bar.textContent = String(err?.message || err);
+  bar.classList.remove("note");
   bar.style.display = "";
   clearTimeout(showError._t);
   showError._t = setTimeout(() => (bar.style.display = "none"), 6000);
