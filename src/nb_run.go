@@ -104,6 +104,13 @@ func handleCellRun(w http.ResponseWriter, r *http.Request, st *notebookStore, ce
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Everything below this cell was produced from a projection that
+	// included its old output, so those results no longer reflect the
+	// notebook (ADR §4.2). Marking them is advisory — we never re-run them,
+	// because unlike a spreadsheet an agent turn costs money and touches
+	// disks. The fold has understood this event since M1; nothing had ever
+	// emitted one, so staleness silently never happened.
+	st.invalidateBelow(cellID)
 
 	// Execution is asynchronous: the call starts a run, it does not wait
 	// for one. A cell that takes ten minutes must not hold an HTTP request

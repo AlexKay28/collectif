@@ -37,12 +37,20 @@ const anthropicDefaultModel = "claude-opus-5"
 
 // anthropicModels is the catalog this transport owns. Model metadata lives
 // with whoever talks to the model — the whole point of #48.
+// Prices are USD per million tokens. Cache reads bill at ~0.1x input and
+// 5-minute writes at ~1.25x, which is the arithmetic behind M2.5: two runs
+// of a cached prefix beat one uncached one.
 var anthropicModels = []ModelInfo{
-	{ID: "claude-opus-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
-	{ID: "claude-sonnet-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
-	{ID: "claude-fable-5", ContextWindow: 1_000_000, MaxOutput: 128_000},
-	{ID: "claude-opus-4-8", ContextWindow: 1_000_000, MaxOutput: 128_000},
-	{ID: "claude-haiku-4-5", ContextWindow: 200_000, MaxOutput: 64_000},
+	{ID: "claude-opus-5", ContextWindow: 1_000_000, MaxOutput: 128_000,
+		InputUSDPerMTok: 5, OutputUSDPerMTok: 25, CacheReadUSDPerMTok: 0.5, CacheWriteUSDPerMTok: 6.25},
+	{ID: "claude-sonnet-5", ContextWindow: 1_000_000, MaxOutput: 128_000,
+		InputUSDPerMTok: 3, OutputUSDPerMTok: 15, CacheReadUSDPerMTok: 0.3, CacheWriteUSDPerMTok: 3.75},
+	{ID: "claude-fable-5", ContextWindow: 1_000_000, MaxOutput: 128_000,
+		InputUSDPerMTok: 10, OutputUSDPerMTok: 50, CacheReadUSDPerMTok: 1, CacheWriteUSDPerMTok: 12.5},
+	{ID: "claude-opus-4-8", ContextWindow: 1_000_000, MaxOutput: 128_000,
+		InputUSDPerMTok: 5, OutputUSDPerMTok: 25, CacheReadUSDPerMTok: 0.5, CacheWriteUSDPerMTok: 6.25},
+	{ID: "claude-haiku-4-5", ContextWindow: 200_000, MaxOutput: 64_000,
+		InputUSDPerMTok: 1, OutputUSDPerMTok: 5, CacheReadUSDPerMTok: 0.1, CacheWriteUSDPerMTok: 1.25},
 }
 
 type anthropicProvider struct {

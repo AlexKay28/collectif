@@ -68,6 +68,25 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 	// loop appends below are new every time.
 	stablePrefix := len(msgs)
 
+	// Resolve the model's budgets once. ADR §4.4 names three, doing three
+	// different jobs: max_tokens is a hard per-response cap the model
+	// cannot see, the notebook's dollar cap is ours and is checked between
+	// turns, and the model-facing task budget is a later addition.
+	info := modelInfoFor(p, model)
+	budgetUSD := doc.Meta.BudgetUSD
+
+	// A budget we cannot price is not a budget. Running anyway would honour
+	// the letter of the setting and none of its intent — the user asked for
+	// a spend cap, and silently not enforcing one is how a surprise bill
+	// happens.
+	if budgetUSD > 0 && info.InputUSDPerMTok == 0 && info.OutputUSDPerMTok == 0 {
+		st.emitError(cellID, run.runID, fmt.Sprintf(
+			"This notebook has a $%.2f budget, but no pricing is known for model %q, so the budget cannot be enforced. "+
+				"Remove the budget to run without one.", budgetUSD, info.ID))
+		st.finishRunWithUsage(cellID, run.runID, CellError, Usage{})
+		return
+	}
+
 	var total Usage
 	status := CellOK
 
@@ -77,19 +96,25 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			break
 		}
 
-		res, err := streamTurn(ctx, st, cellID, run, p, Request{
-			Model:     model,
-			System:    notebookSystemPrompt(doc),
-			Messages:  msgs,
-			Tools:     toolSpecs(),
-			MaxTokens: defaultMaxTokens,
-			Effort:    effort,
-			// Everything the projection produced is identical between two
-			// runs of this cell; everything this loop appends after it is
-			// not. Telling the transport where that line falls is what
-			// lets the reusable span be cached (#51).
+		// Pre-flight. Owning the loop means the size is known before the
+		// request is sent, so an oversized projection is an explicit error
+		// rather than something the API silently truncates (ADR §4.8).
+		req := Request{
+			Model:                model,
+			System:               notebookSystemPrompt(doc),
+			Messages:             msgs,
+			Tools:                toolSpecs(),
+			MaxTokens:            defaultMaxTokens,
+			Effort:               effort,
 			StablePrefixMessages: stablePrefix,
-		})
+		}
+		if err := checkRequestFits(info, req); err != nil {
+			st.emitError(cellID, run.runID, err.Error())
+			status = CellError
+			break
+		}
+
+		res, err := streamTurn(ctx, st, cellID, run, p, req)
 		if err != nil {
 			if run.wasInterrupted() || errors.Is(err, context.Canceled) {
 				status = CellInterrupted
@@ -100,6 +125,19 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			break
 		}
 		total = total.add(res.Usage)
+
+		// The notebook's dollar cap, checked between turns. A model that
+		// keeps calling tools should cost what the user agreed to and then
+		// stop — the turn cap alone bounds iterations, not spend.
+		if budgetUSD > 0 {
+			if spent := usageCostUSD(info, total); spent >= budgetUSD {
+				st.emitError(cellID, run.runID, fmt.Sprintf(
+					"Stopped after spending $%.4f of this notebook's $%.2f budget. "+
+						"Raise the budget in notebook settings to continue.", spent, budgetUSD))
+				status = CellError
+				break
+			}
+		}
 
 		// Check the stop reason before touching content: a refusal arrives
 		// as a successful response with nothing in it.
@@ -237,6 +275,20 @@ func toolNames() []string {
 		return []string{"(none configured)"}
 	}
 	return names
+}
+
+// modelInfoFor looks a model up in the provider's own catalog, falling back
+// to a conservative window so a model we do not recognise still gets a
+// pre-flight check rather than none.
+func modelInfoFor(p Provider, model string) ModelInfo {
+	if p != nil {
+		for _, m := range p.Models() {
+			if m.ID == model || (model == "" && len(p.Models()) > 0) {
+				return m
+			}
+		}
+	}
+	return ModelInfo{ID: model, ContextWindow: defaultContextLimit}
 }
 
 // notebookSystemPrompt states where the agent is and what it is working in.

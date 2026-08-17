@@ -11,16 +11,84 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 )
 
-// ModelInfo describes one model's budgets. ContextWindow is the total
-// input+output window in tokens; MaxOutput is the per-response ceiling.
+// ModelInfo describes one model's budgets and what it costs. ContextWindow
+// is the total input+output window in tokens; MaxOutput is the per-response
+// ceiling.
+//
+// Prices are USD per million tokens, and the cached rates are separate
+// because they differ by an order of magnitude — a cost model that ignored
+// that would make M2.5's whole argument invisible.
 type ModelInfo struct {
 	ID            string
 	ContextWindow int
 	MaxOutput     int
+
+	InputUSDPerMTok      float64
+	OutputUSDPerMTok     float64
+	CacheReadUSDPerMTok  float64
+	CacheWriteUSDPerMTok float64
+}
+
+// usageCostUSD prices one turn. Cache reads and writes are billed at their
+// own rates, so this is also what makes a warm run visibly cheaper than a
+// cold one rather than merely differently shaped.
+func usageCostUSD(m ModelInfo, u Usage) float64 {
+	const perM = 1_000_000.0
+	return float64(u.InputTokens)/perM*m.InputUSDPerMTok +
+		float64(u.OutputTokens)/perM*m.OutputUSDPerMTok +
+		float64(u.CacheReadTokens)/perM*m.CacheReadUSDPerMTok +
+		float64(u.CacheCreationTokens)/perM*m.CacheWriteUSDPerMTok
+}
+
+// estimateRequestTokens is a pre-flight size estimate.
+//
+// Owning the loop means the request size is known *before* it is sent (ADR
+// §4.8), so pressure can be reported ahead of a turn rather than inferred
+// from a transcript after one. Four characters per token is the usual rough
+// ratio; this is a guard rail, not an accountant, and the real number comes
+// back on the response.
+func estimateRequestTokens(req Request) int {
+	chars := len(req.System)
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			chars += len(b.Text)
+			for k, v := range b.ToolInput {
+				chars += len(k)
+				if s, ok := v.(string); ok {
+					chars += len(s)
+				} else {
+					chars += 8
+				}
+			}
+		}
+	}
+	for _, t := range req.Tools {
+		chars += len(t.Name) + len(t.Description) + 200 // schema, roughly
+	}
+	return chars / 4
+}
+
+// checkRequestFits refuses a projection that cannot fit rather than letting
+// the API truncate it. An explicit error names the problem; a silent trim
+// would let the model reason confidently about a document it only half saw.
+func checkRequestFits(m ModelInfo, req Request) error {
+	limit := m.ContextWindow
+	if limit <= 0 {
+		limit = defaultContextLimit
+	}
+	// Leave room for the reply as well as the prompt.
+	if est := estimateRequestTokens(req); est >= limit {
+		return fmt.Errorf(
+			"the cells above this one come to roughly %d tokens, which does not fit %s's %d-token window — "+
+				"shorten them, remove a file cell, or split the work across notebooks",
+			est, m.ID, limit)
+	}
+	return nil
 }
 
 // defaultContextLimit is the fallback for a model we don't recognise.
