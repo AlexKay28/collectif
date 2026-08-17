@@ -62,6 +62,12 @@ type notebookStore struct {
 	// versa) — the two are strictly independent, as in session.go.
 	subMu sync.Mutex
 	subs  map[*wsSub]bool
+
+	// runsMu guards runs ONLY — in-flight cell executions, keyed by cell
+	// id. Independent of mu and subMu for the same reason: a running
+	// command must never be able to block an append or a broadcast.
+	runsMu sync.Mutex
+	runs   map[string]*nbRun
 }
 
 func (st *notebookStore) logPath() string  { return filepath.Join(st.dir, st.slug+".jsonl") }
@@ -314,10 +320,29 @@ func (st *notebookStore) removeSub(sub *wsSub) {
 // position lets the client drop anything already folded in (seq <=
 // fold.version) instead of applying it twice.
 func (st *notebookStore) broadcastEvent(seq int, e Event) {
-	msg, err := json.Marshal(map[string]any{"type": "event", "seq": seq, "event": e})
+	if msg, err := json.Marshal(map[string]any{"type": "event", "seq": seq, "event": e}); err == nil {
+		st.sendAll(msg)
+	}
+}
+
+// broadcastDelta streams a fragment of a running cell's output. Deltas are
+// live-view only: they carry no sequence number because they are not log
+// positions, and they are never persisted. A client that misses them
+// recovers the finalised text from the output_appended event that follows.
+func (st *notebookStore) broadcastDelta(cellID, runID, text string) {
+	if text == "" {
+		return
+	}
+	msg, err := json.Marshal(map[string]any{
+		"type": "delta", "cellId": cellID, "runId": runID, "text": text,
+	})
 	if err != nil {
 		return
 	}
+	st.sendAll(msg)
+}
+
+func (st *notebookStore) sendAll(msg []byte) {
 	st.subMu.Lock()
 	subs := make([]*wsSub, 0, len(st.subs))
 	for sub := range st.subs {
@@ -428,6 +453,7 @@ func releaseNotebook(slug string) error {
 	if !ok {
 		return nil
 	}
+	st.interruptAllRuns()
 	st.closeSubs()
 	return st.Close()
 }
@@ -443,6 +469,9 @@ func closeAllNotebooks() {
 	nbRegistry = map[string]*notebookStore{}
 	nbRegistryMu.Unlock()
 	for _, st := range stores {
+		// Stop in-flight commands before releasing the log, so a shutdown
+		// doesn't leave orphaned process groups behind.
+		st.interruptAllRuns()
 		st.closeSubs()
 		_ = st.Close()
 	}
