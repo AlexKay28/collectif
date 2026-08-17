@@ -358,36 +358,20 @@ func openSessionNotebook(sessionID, cli, cwd string, caps Capabilities) (*notebo
 	}
 	// The link back to the session, and the switch that sends prompt cells
 	// to the CLI instead of to our own provider.
-	if st.Doc().Meta.SessionID != sessionID {
-		meta := st.Doc().Meta
-		meta.SessionID = sessionID
+	if m := st.Doc().Meta; m.SessionID != sessionID || m.CLI != cli {
+		meta := m
+		meta.SessionID, meta.CLI = sessionID, cli
 		if _, err := st.Append(evMetaSet, metaSetPayload{Meta: &meta}); err != nil {
 			return nil, err
 		}
 	}
 
-	// ADR 0002 D11: an adapter that cannot project says so, in the
-	// document, once. An empty notebook is indistinguishable from an agent
-	// that did nothing, and that is the kind of quiet wrongness this whole
-	// design exists to stop shipping.
-	if !caps.TranscriptContent {
-		cell := Cell{
-			ID:    uuid.NewString(),
-			Type:  CellMarkdown,
-			State: CellIdle,
-			Meta:  CellMeta{Provenance: ProvenanceMirrored},
-			Source: "## Not available for " + cli + "\n\n" +
-				"collectif cannot yet turn a `" + cli + "` session into a document — its transcript " +
-				"format has no projection written for it, so this notebook will stay empty while the " +
-				"session runs.\n\n" +
-				"This is a gap, not a failure: nothing here is reconstructed from terminal output, " +
-				"because a guess rendered as a transcript is worse than an absence. Use the terminal " +
-				"view for this session, and add cells of your own here if they are useful.",
-		}
-		if _, err := st.Append(evCellInserted, cellInsertedPayload{Cell: cell}); err != nil {
-			return nil, err
-		}
-	}
+	// The gap an adapter cannot fill is stated in the document's fidelity
+	// block, which is derived on read (#47 P2). P0 wrote a markdown cell
+	// here instead; that put a claim about the *build* permanently into a
+	// *document*, where it would still be asserting "codex turns are not
+	// shown" long after someone wrote the parser.
+	_ = caps
 	return st, nil
 }
 

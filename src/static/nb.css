@@ -565,3 +565,18 @@ html, body {
 }
 .out.approval.done.approved .verdict { color: var(--nb-ok); }
 .out.approval.done.denied .verdict { color: var(--nb-err); }
+
+/* ── Fidelity ────────────────────────────────────────────────────────
+   Shown only when something is missing. A banner that appears on every
+   notebook is a banner nobody reads, and the whole point is that this one
+   gets read. Stated in terms of what you can do rather than which flags
+   are set — "its turns are not shown here" is information; "turns:
+   false" is a data dump. */
+#nb-fidelity {
+  max-width: 860px; margin: 0 30px 18px;
+  border-left: 2px solid var(--nb-stale);
+  padding: 9px 0 9px 13px;
+}
+#nb-fidelity .what { font: 12.5px/1.6 var(--nb-serif); color: var(--nb-dim); }
+#nb-fidelity .what b { color: var(--nb-ink); font-weight: 400; }
+#nb-fidelity .can { font: 11.5px/1.6 var(--nb-serif); color: var(--nb-muted); margin-top: 3px; }
