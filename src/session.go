@@ -301,6 +301,7 @@ type wsSub struct {
 	c      *websocket.Conn
 	out    chan []byte
 	closed chan struct{}
+	once   sync.Once
 	kind   int // websocket.TextMessage or websocket.BinaryMessage
 }
 
@@ -326,10 +327,7 @@ func (w *wsSub) pump() {
 	defer ticker.Stop()
 	for {
 		select {
-		case msg, ok := <-w.out:
-			if !ok {
-				return // closed by stop()
-			}
+		case msg := <-w.out:
 			if err := w.c.WriteMessage(w.kind, msg); err != nil {
 				w.stop()
 				return
@@ -341,6 +339,8 @@ func (w *wsSub) pump() {
 				w.stop()
 				return
 			}
+		case <-w.closed:
+			return
 		}
 	}
 }
@@ -349,24 +349,39 @@ func (w *wsSub) pump() {
 // the client is behind. Dropped bytes for the terminal show up as a gap
 // in scrollback (which reconnect solves); dropped dashboard patches are
 // non-fatal because state is fully re-broadcast on the next event.
+//
+// A stopped sub also drops. Note what this does NOT do: it never sends on
+// a channel anyone might close, because nobody closes w.out. Closing it in
+// stop() while a producer was mid-send was a data race whose payoff was a
+// "send on closed channel" panic — process-fatal, and reachable whenever a
+// subscriber disconnected while a run was streaming to it.
 func (w *wsSub) send(msg []byte) bool {
+	select {
+	case <-w.closed:
+		return false
+	default:
+	}
 	select {
 	case w.out <- msg:
 		return true
-	default:
+	case <-w.closed:
 		return false
+	default:
+		return false // queue full: this client is behind
 	}
 }
 
+// stop is idempotent and safe to call from any goroutine — both the reader
+// side and the writer side race to call it on a broken connection.
+//
+// w.out is deliberately never closed: it is garbage collected with the sub,
+// and leaving it open is what makes send() safe without a lock around every
+// broadcast.
 func (w *wsSub) stop() {
-	select {
-	case <-w.closed:
-		return
-	default:
-	}
-	close(w.closed)
-	close(w.out)
-	_ = w.c.Close()
+	w.once.Do(func() {
+		close(w.closed)
+		_ = w.c.Close()
+	})
 }
 
 const (
