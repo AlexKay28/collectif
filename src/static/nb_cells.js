@@ -75,7 +75,13 @@ function cssEscape(s) {
 // then reads as a document with a terminal in it.
 function renderCell(cell, index) {
   const selected = cell.id === state.selected;
-  const editing = selected && state.mode === "edit";
+  // ADR 0002 D9. A mirrored cell was produced by a CLI whose context lives
+  // inside a process we do not own, so it cannot be edited and re-run —
+  // only re-asked. Showing an Edit button on one would be an interactive
+  // lie, which is the exact failure mode the ADR set out to stop.
+  const mirrored = cell.meta && cell.meta.provenance === "mirrored";
+  const compact = cell.meta && cell.meta.provenance === "compact";
+  const editing = selected && state.mode === "edit" && !mirrored && !compact;
   const prose = cell.type === "markdown" || cell.type === "prompt";
   const live = state.live.get(cell.id);
   const hidden = state.hiddenOutputs.has(cell.id);
@@ -93,17 +99,20 @@ function renderCell(cell, index) {
          spellcheck="false" rows="${rows}">${escapeHTML(cell.source || "")}</textarea>`
     : cell.type === "markdown"
       ? `<div class="nb-md">${renderMarkdown(cell.source) || '<p class="nb-hint">Empty — press Enter to edit.</p>'}</div>`
-      : `<pre class="nb-src-view ${prose ? "prose" : ""}">${escapeHTML(cell.source || "") || '<span class="nb-hint">Empty — press Enter to edit.</span>'}</pre>`;
+      : `<pre class="nb-src-view ${prose ? "prose" : ""}">${escapeHTML(cell.source || "") ||
+            (mirrored
+              ? '<span class="nb-hint">This turn was already under way when collectif attached.</span>'
+              : '<span class="nb-hint">Empty — press Enter to edit.</span>')}</pre>`;
 
-  const runnable = cell.type === "shell" || cell.type === "prompt";
+  const runnable = !mirrored && !compact && (cell.type === "shell" || cell.type === "prompt");
   const running = cell.state === "running";
 
   return `
-  <div class="nb-cell ${selected ? "sel" : ""} state-${escapeHTML(cell.state || "idle")}"
+  <div class="nb-cell ${selected ? "sel" : ""} state-${escapeHTML(cell.state || "idle")}${mirrored ? " mirrored" : ""}${compact ? " compact" : ""}"
        data-cell="${escapeHTML(cell.id)}">
     <div class="nb-gutter">
       <span class="nb-idx">${index}</span>
-      <span class="nb-type">${escapeHTML(cell.type)}</span>
+      <span class="nb-type">${escapeHTML(compact ? "compacted" : cell.type)}</span>
       ${stateChip(cell)}
       ${cacheChip(cell)}
     </div>
@@ -113,12 +122,15 @@ function renderCell(cell, index) {
       ${failed ? `<div class="cell-error"><span>${escapeHTML(failed)}</span><button class="x" data-dismiss="${escapeHTML(cell.id)}" title="Dismiss">✕</button></div>` : ""}
     </div>
     <div class="nb-actions">
-      ${running
+      ${running && !mirrored
         ? `<button data-interrupt="${escapeHTML(cell.id)}" title="Stop (i)">■</button>`
         : runnable
           ? `<button data-run="${escapeHTML(cell.id)}" title="Run (⇧Enter)">▶</button>`
           : ``}
-      <button data-del="${escapeHTML(cell.id)}" title="Delete (dd)">✕</button>
+      ${mirrored && cell.type === "prompt" && cell.source
+        ? `<button data-reask="${escapeHTML(cell.id)}" title="Ask this again (the agent's context cannot be rewound)">↻</button>`
+        : ``}
+      ${mirrored || compact ? `` : `<button data-del="${escapeHTML(cell.id)}" title="Delete (dd)">✕</button>`}
     </div>
   </div>`;
 }
@@ -207,6 +219,12 @@ function wire() {
       nbAPI.interruptCell(state.id, b.dataset.interrupt).catch(showError);
     }),
   );
+  root.querySelectorAll("[data-reask]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      reask(b.dataset.reask);
+    }),
+  );
   root.querySelectorAll("[data-del]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -293,6 +311,23 @@ async function deleteCell(id) {
   try {
     await nbAPI.deleteCell(state.id, id);
     state.selected = nextID;
+  } catch (err) {
+    showError(err);
+  }
+}
+
+// Re-run degrades to re-ask on a mirrored cell (ADR 0002 D9). There is no
+// wire on which to tell a running CLI "forget turn 3, here is a different
+// turn 3", so the honest verb is to put the same words at the bottom as a
+// new prompt — which is what you would do by hand anyway.
+async function reask(id) {
+  const cell = findCell(id);
+  if (!cell) return;
+  try {
+    const res = await nbAPI.addCell(state.id, { type: "prompt", source: cell.source });
+    state.selected = res.cellId;
+    state.mode = "edit";
+    render();
   } catch (err) {
     showError(err);
   }
@@ -491,6 +526,18 @@ function onKeyDown(e) {
   if (!plain) return;
 
   if (e.key !== "d" && e.key !== "i") pendingKey = null;
+
+  // Mirrored cells are read-only. Refusing here, with a reason, beats
+  // letting the key fire and surfacing a server error for something the
+  // UI already knew was impossible.
+  const cur = id ? findCell(id) : null;
+  const readOnly = cur && cur.meta &&
+    (cur.meta.provenance === "mirrored" || cur.meta.provenance === "compact");
+  if (readOnly && "dxmypfM".includes(e.key)) {
+    e.preventDefault();
+    showNote("This cell is a record of what the agent did — press ↻ to ask it again.");
+    return;
+  }
 
   switch (e.key) {
     // ── selection ──

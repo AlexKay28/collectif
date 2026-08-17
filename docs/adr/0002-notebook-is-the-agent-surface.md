@@ -159,6 +159,19 @@ transcript; subagent conversations are written to
 parser reads them unchanged, so M6's input problem is already solved — it
 needs a file watcher and nesting, not a second parser.
 
+**A transcript is a tree, not a list.** Every line names its `parentUuid`,
+and two user turns sharing a parent means the first was abandoned and
+re-sent. A projector that ignores this marks a question that was never
+answered as having succeeded — which the replayed document showed, twice.
+Interruptions are worse: pressing Escape writes a literal
+`[Request interrupted by user]` line with role `user`, no `origin` and no
+`isMeta`, so every provenance filter passes it and it renders as a prompt
+nobody typed. Both are now state changes on the turn they stopped rather
+than turns of their own. Matching English sentinel text is fragile and
+there is no other signal in the format; the mitigation is that the match is
+whole-line, so a prompt *about* interruption is still a prompt and a
+wording change degrades to the old behaviour rather than to lost turns.
+
 **The user/machine boundary is the hard part, and `isMeta` does not draw it.**
 Claude Code writes a great deal as the user that the user never typed. Line
 provenance is `origin.kind`; the filter fails *closed*, so an unrecognised kind
@@ -211,8 +224,8 @@ now about what a projected session can do, not about growing a competing agent.
 |---|---|---|
 | M0, M1 | done | **unchanged** — the foundation was right |
 | M2, M2.5 | done | **unchanged, re-scoped** as the detached-notebook backend (D10) |
-| **P0 — Projection spike** | — | **NEW, in progress.** Slice A (parser) done: `TranscriptPart` + `ProjectTranscriptLine`, verified against a real 11k-line transcript. Slices B (parts → cell events) and C (a session's notebook in the browser) remain. Exit: open a running session in the browser and read its turns as cells with no xterm involved. |
-| **P1 — Input + provenance** | — | **NEW.** Authored prompt cells write to the PTY; mirrored cells get their reduced verb set (D9); approvals render as inline widgets from hooks. Exit: drive a full `claude` session from the notebook, terminal never opened. |
+| **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
+| **P1 — Input + provenance** | — | **NEXT.** Authored prompt cells write to the PTY; approvals render as inline widgets from hooks. Most of D9's read-only half landed in P0; what remains is the write path. |
 | **P2 — Degradation** | — | **NEW.** Per-adapter capability surfacing (D11); codex and opencode render honestly. Exit: three CLIs, three fidelities, no lies. |
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
@@ -279,3 +292,10 @@ input path into a view that cannot show results.
 5. **Should detached notebooks and session notebooks live in the same list?**
    The sidebar currently shows both under separate headings, which is a UI
    answer to an unanswered modelling question.
+6. **What settles the last turn of a session that is still running?** Today a
+   turn is closed by the next prompt or by the session ending, so the live
+   cell shows `running` for as long as the agent is idle at a prompt. Hooks
+   (`Stop`) would close it precisely; P1 territory.
+7. **Do abandoned branches belong in the document at all?** They are currently
+   shown as interrupted cells. Hiding them would read better and record less;
+   the log keeps them either way.

@@ -177,11 +177,12 @@ function worstState(nb) {
   return "";
 }
 
-// PTY sessions are a different kind of thing to a notebook — a running
-// process rather than a document — so they get their own section rather
-// than being flattened into one list. The notebook page only observes
-// them: spawning, answering prompts and the terminal itself still live in
-// the dashboard until M7.
+// A running session IS a notebook (ADR 0002 D1'). Clicking one opens its
+// document — the turns projected from its transcript — rather than sending
+// you to a terminal. Sessions keep their own section because they are still
+// a different kind of thing: a document with a live process behind it,
+// which you can read but not edit. The terminal is one click further away,
+// for the raw bytes a projection cannot show.
 function renderSessions() {
   const sess = state.sessions || [];
   sessLabel.style.display = sess.length ? "" : "none";
@@ -192,21 +193,47 @@ function renderSessions() {
     const note = a.pending
       ? "needs you"
       : (a.currentTask || a.lastActivity || a.status || "");
-    return `<div class="agent session ${cls}" data-session="${escapeHTML(a.id)}"
-                 title="Open this session's terminal in the dashboard">
+    // A session with no notebook yet — no transcript written, or an
+    // adapter that cannot project — still gets a row, and its row still
+    // goes to the terminal. Offering a document that is not there would
+    // be the more polished lie.
+    const nb = a.notebook || "";
+    const sel = nb && nb === state.id ? " sel" : "";
+    return `<div class="agent session ${cls}${sel}" data-session="${escapeHTML(a.id)}"
+                 data-nb="${escapeHTML(nb)}"
+                 title="${nb ? "Open this session as a notebook" : "No document yet — opens the terminal"}">
               <span class="dot"></span>
               <div>
                 <div class="name">${escapeHTML((a.cli || "agent") + " · " + a.id.slice(0, 8))}</div>
                 <div class="meta">${escapeHTML(String(note).slice(0, 44))}</div>
               </div>
+              <button class="term" data-term="${escapeHTML(a.id)}"
+                      title="Open the raw terminal in the dashboard">⌘</button>
             </div>`;
   }).join("");
 
   sessList.querySelectorAll("[data-session]").forEach((el) =>
-    el.addEventListener("click", () => {
-      // The terminal lives in the dashboard. Sending you there is honest;
-      // a second xterm in this page would be a copy that drifts.
-      window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${el.dataset.session}`, "_blank");
+    el.addEventListener("click", async () => {
+      const nb = el.dataset.nb;
+      if (!nb) {
+        window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${el.dataset.session}`, "_blank");
+        return;
+      }
+      try {
+        await openNotebook(nb);
+        renderSidebar();
+      } catch (err) {
+        showError(err);
+      }
+    }),
+  );
+
+  // The escape hatch of D8': a projection cannot show everything a PTY
+  // can, so the raw bytes stay one click away rather than being retired.
+  sessList.querySelectorAll("[data-term]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${b.dataset.term}`, "_blank");
     }),
   );
 

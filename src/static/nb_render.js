@@ -137,13 +137,29 @@ function renderOutput(o) {
       // answer surprises you, not the answer.
       return `<details class="out think"><summary>reasoning</summary><pre>${escapeHTML(o.text || "")}</pre></details>`;
     case "tool_call": {
-      const input = o.data && o.data.input ? JSON.stringify(o.data.input) : "";
-      return `<div class="out tool"><span class="tool-name">→ ${escapeHTML(o.text || "")}</span>` +
-             (input ? `<span class="tool-args">${escapeHTML(input)}</span>` : "") + `</div>`;
+      const d = o.data || {};
+      // The name lives in data for a projected session and in text for a
+      // native run; both shapes reach this renderer.
+      const name = d.name || o.text || "tool";
+      return `<div class="out tool"><span class="tool-name">→ ${escapeHTML(name)}</span>` +
+             (toolArgs(d.input) ? `<span class="tool-args">${escapeHTML(toolArgs(d.input))}</span>` : "") +
+             `</div>`;
     }
     case "tool_result": {
       const bad = o.data && o.data.isError;
-      return `<pre class="out toolres${bad ? " err" : ""}">${escapeHTML(o.text || "")}</pre>`;
+      const text = o.text || "";
+      // A tool result is routinely thousands of lines. Inline, it buries
+      // the answer that follows it; dropped, the document stops being a
+      // record. Collapsed with its first line showing is the compromise
+      // a terminal cannot offer at all.
+      if (text.length > 600 || text.split("\n").length > 12) {
+        const head = text.split("\n")[0].slice(0, 120);
+        const lines = text.split("\n").length;
+        return `<details class="out toolres long${bad ? " err" : ""}">` +
+               `<summary>${escapeHTML(head)}<span class="more"> ${lines} lines</span></summary>` +
+               `<pre>${escapeHTML(text)}</pre></details>`;
+      }
+      return `<pre class="out toolres${bad ? " err" : ""}">${escapeHTML(text)}</pre>`;
     }
     // thinking / tool_call / tool_result / image / subagent / approval are
     // declared in the schema but not produced until M2+. Render their text
@@ -152,6 +168,20 @@ function renderOutput(o) {
     default:
       return `<pre class="out">${escapeHTML(o.text || "")}</pre>`;
   }
+}
+
+// toolArgs picks the one argument worth showing on the call line. A Bash
+// call is its command; a Read is its path. Falling back to the whole JSON
+// blob is right for tools we do not recognise and wrong for the four that
+// account for most calls, which is why the salient keys are named.
+function toolArgs(input) {
+  if (input == null) return "";
+  if (typeof input !== "object") return String(input);
+  for (const key of ["command", "file_path", "path", "pattern", "query", "url", "description"]) {
+    if (typeof input[key] === "string" && input[key]) return input[key];
+  }
+  const json = JSON.stringify(input);
+  return json === "{}" ? "" : json;
 }
 
 // renderDiff colourises a unified diff. The single highest-value thing a

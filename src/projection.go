@@ -47,7 +47,37 @@ const (
 	// so the notebook renders it rather than dropping it — but never as
 	// something the user typed.
 	PartCompactSummary PartKind = "compact_summary"
+
+	// PartInterrupted marks the user stopping a turn. It is a state change
+	// on the turn that was running, not a turn of its own.
+	PartInterrupted PartKind = "interrupted"
 )
+
+// claudeInterruptMarkers are the literal strings Claude Code writes to the
+// transcript when a turn is stopped. They arrive as role:"user" with no
+// origin and no isMeta, so every provenance filter passes them and the
+// document shows a prompt nobody typed.
+//
+// Matching on English sentinel text is fragile and there is no better
+// signal in the format — no flag, no subtype, no distinguishing field. The
+// mitigation is that the match is whole-line rather than a substring
+// search, so a prompt *about* interruption is still a prompt, and a wording
+// change degrades to showing the sentinel as a prompt again rather than to
+// losing turns.
+var claudeInterruptMarkers = []string{
+	"[Request interrupted by user]",
+	"[Request interrupted by user for tool use]",
+}
+
+func isClaudeInterrupt(s string) bool {
+	s = strings.TrimSpace(s)
+	for _, m := range claudeInterruptMarkers {
+		if s == m {
+			return true
+		}
+	}
+	return false
+}
 
 // TranscriptPart is one projectable piece of one transcript line.
 //
@@ -85,6 +115,12 @@ type TranscriptPart struct {
 	// the watcher re-reads regions of the file, and cells must not double.
 	UUID string
 
+	// ParentUUID is the line this one follows. The transcript is a tree,
+	// not a list: two user turns sharing a parent means the first was
+	// abandoned and re-sent, and without this the projector would mark a
+	// question that was never answered as having succeeded.
+	ParentUUID string
+
 	// At is the CLI's timestamp, or the zero time if it was unparseable.
 	// A bad timestamp never costs us the turn.
 	At time.Time
@@ -98,10 +134,11 @@ type TranscriptPart struct {
 // field named here is a compatibility commitment, so the list stays as
 // short as the feature allows.
 type claudeLine struct {
-	Type      string `json:"type"`
-	UUID      string `json:"uuid"`
-	Timestamp string `json:"timestamp"`
-	Sidechain bool   `json:"isSidechain"`
+	Type       string `json:"type"`
+	UUID       string `json:"uuid"`
+	ParentUUID string `json:"parentUuid"`
+	Timestamp  string `json:"timestamp"`
+	Sidechain  bool   `json:"isSidechain"`
 
 	// IsMeta marks a line Claude Code wrote *in the user's voice* that the
 	// user never typed: command caveats, injected skill bodies, system
@@ -193,10 +230,11 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 	}
 
 	base := TranscriptPart{
-		Sidechain: line.Sidechain,
-		Model:     line.Message.Model,
-		UUID:      line.UUID,
-		At:        parseClaudeTime(line.Timestamp),
+		Sidechain:  line.Sidechain,
+		Model:      line.Message.Model,
+		UUID:       line.UUID,
+		ParentUUID: line.ParentUUID,
+		At:         parseClaudeTime(line.Timestamp),
 	}
 
 	// A user line whose content is a bare string is a typed prompt — the
@@ -207,6 +245,9 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 			return nil, nil
 		}
 		switch {
+		case isClaudeInterrupt(s):
+			base.Kind = PartInterrupted
+			return []TranscriptPart{base}, nil
 		case line.IsCompactSummary:
 			base.Kind = PartCompactSummary
 		case line.typedByAHuman():
@@ -232,6 +273,11 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 			// prompt; only the line-level flags tell them apart.
 			if line.Type == "user" {
 				switch {
+				case isClaudeInterrupt(b.Text):
+					p.Kind = PartInterrupted
+					p.Text = ""
+					out = append(out, p)
+					continue
 				case line.IsCompactSummary:
 					p.Kind = PartCompactSummary
 				case line.typedByAHuman():

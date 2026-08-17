@@ -397,3 +397,74 @@ func TestProjectClaude_CompactSummaryIsItsOwnKind(t *testing.T) {
 			parts[0].Kind)
 	}
 }
+
+// ─── Interruption (found by replaying a real session) ───────────────────
+
+// Pressing Escape writes a literal `[Request interrupted by user]` line
+// with role user, no origin and no isMeta — so every provenance filter we
+// have lets it through, and the replayed document showed it as something
+// the user had typed. They typed nothing; they stopped the agent.
+func TestProjectClaude_InterruptIsNotAPrompt(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"i1","timestamp":"2026-08-17T10:00:00.000Z","promptId":"p",
+	  "message":{"role":"user","content":"[Request interrupted by user]"}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts, want 1 — the interruption is real, it is just not a prompt: %+v",
+			len(parts), parts)
+	}
+	if parts[0].Kind != PartInterrupted {
+		t.Errorf("kind = %q, want interrupted", parts[0].Kind)
+	}
+}
+
+// The same sentinel appears with a trailing reason on tool interrupts.
+func TestProjectClaude_InterruptVariantsAreRecognised(t *testing.T) {
+	for _, text := range []string{
+		"[Request interrupted by user]",
+		"[Request interrupted by user for tool use]",
+	} {
+		parts := projectLine(t, `{"type":"user","uuid":"i2","timestamp":"2026-08-17T10:00:00.000Z",
+		  "message":{"role":"user","content":`+jsonString(text)+`}}`)
+		if len(parts) != 1 || parts[0].Kind != PartInterrupted {
+			t.Errorf("%q projected as %+v, want an interrupt", text, parts)
+		}
+	}
+}
+
+// A prompt that merely mentions an interruption is still a prompt. The
+// sentinel is matched as a whole line, not searched for.
+func TestProjectClaude_TalkingAboutInterruptsIsStillAPrompt(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"i3","timestamp":"2026-08-17T10:00:00.000Z","origin":{"kind":"human"},
+	  "message":{"role":"user","content":"why did it say [Request interrupted by user]?"}}`)
+
+	if len(parts) != 1 || parts[0].Kind != PartUserText {
+		t.Errorf("a real question about interrupts was swallowed: %+v", parts)
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// ─── Branches ───────────────────────────────────────────────────────────
+
+// The transcript is a tree, not a list: every line names its parent, and
+// two user turns sharing a parent means the first was abandoned and
+// re-sent. Without the parent link the projector cannot tell an abandoned
+// turn from a completed one, and the replayed document showed a prompt
+// marked "ok" that had produced nothing at all.
+func TestProjectClaude_PartsCarryTheirParent(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"b2","parentUuid":"b1","timestamp":"2026-08-17T10:00:00.000Z",
+	  "origin":{"kind":"human"},"message":{"role":"user","content":"try again"}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts: %+v", len(parts), parts)
+	}
+	if parts[0].ParentUUID != "b1" {
+		t.Errorf("parent = %q, want b1", parts[0].ParentUUID)
+	}
+}

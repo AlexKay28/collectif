@@ -69,6 +69,14 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 		openTicker.Stop()
 		defer f.Close()
 
+		// A transcript exists, so there is something to render. Opening
+		// here rather than at spawn keeps a session that never produces
+		// one from leaving an empty document behind.
+		projector := openSessionProjector(s)
+		if projector != nil {
+			defer projector.Close()
+		}
+
 		var partial []byte
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -114,6 +122,14 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 				}
 				partial = partial[:0]
 				if len(strings.TrimSpace(string(line))) > 0 && adapter != nil {
+					// Projection is additive: it must never interfere with
+					// the usage accounting below, which predates it and
+					// feeds the pressure gauge.
+					if projector != nil {
+						if parts, perr := adapter.ProjectTranscriptLine(line); perr == nil && len(parts) > 0 {
+							projector.Ingest(parts)
+						}
+					}
 					ev, perr := adapter.ParseTranscriptLine(line)
 					if perr == nil && ev.HasUsage {
 						addedIn += int64(ev.InputTokens)
