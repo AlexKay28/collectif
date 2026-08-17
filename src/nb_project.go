@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // projectionCellBudget bounds what one cell may contribute. The notebook
@@ -71,7 +72,12 @@ func projectCell(nb *Notebook, c Cell) ([]Message, error) {
 		if strings.TrimSpace(c.Source) == "" {
 			return nil, nil
 		}
-		out := []Message{userText(c.Source)}
+		// Trimmed exactly as the target's own source is below. A cell has
+		// to render identically whether it is the one being run or context
+		// above one, or a trailing newline from a textarea makes the same
+		// cell byte-different between two runs and the cached prefix misses
+		// — silently, at full price.
+		out := []Message{userText(strings.TrimSpace(c.Source))}
 		// Only a cell that actually produced an answer contributes one.
 		// Projecting an empty assistant turn would tell the model it had
 		// already replied when it had not.
@@ -153,8 +159,34 @@ func elide(s string, budget int) string {
 		return s
 	}
 	half := budget / 2
-	head, tail := s[:half], s[len(s)-half:]
-	return fmt.Sprintf("%s\n… %d bytes truncated …\n%s", head, len(s)-budget, tail)
+	// Cut on rune boundaries. Slicing by byte offset splits multi-byte
+	// characters, and json.Marshal turns the fragments into U+FFFD before
+	// the request goes out — so the model reads a mangled boundary.
+	head := s[:runeBoundaryBefore(s, half)]
+	tail := s[runeBoundaryAfter(s, len(s)-half):]
+	return fmt.Sprintf("%s\n… %d bytes truncated …\n%s", head, len(s)-len(head)-len(tail), tail)
+}
+
+// runeBoundaryBefore returns the largest index <= i that starts a rune.
+func runeBoundaryBefore(s string, i int) int {
+	if i > len(s) {
+		i = len(s)
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// runeBoundaryAfter returns the smallest index >= i that starts a rune.
+func runeBoundaryAfter(s string, i int) int {
+	if i < 0 {
+		i = 0
+	}
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return i
 }
 
 // readContainedFile reads a path relative to root, refusing anything that

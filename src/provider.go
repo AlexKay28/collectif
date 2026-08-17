@@ -173,6 +173,11 @@ const (
 type ContentBlock struct {
 	Type BlockType
 	Text string
+	// Signature accompanies a thinking block. It is opaque and must be
+	// passed back byte-for-byte when the same turn is echoed to the API:
+	// with tools in play, a modified or missing signature is a 400. It is
+	// the reason a thinking block cannot be reconstructed from stored text.
+	Signature string
 
 	// tool_use
 	ToolUseID string

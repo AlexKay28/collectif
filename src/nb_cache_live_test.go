@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -64,8 +66,15 @@ func TestLive_CachePaysOnASecondRun(t *testing.T) {
 		}
 		defer stream.Close()
 		for {
+			// Distinguish a finished stream from a failed one. Treating a
+			// 401 or a 429 as EOF would return zero usage and land on the
+			// "prefix is not matching" failure below — the one check that
+			// cannot run offline, pointing at the wrong bug.
 			if _, err := stream.Next(); err != nil {
-				break
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				t.Fatalf("%s: stream failed (this is an API or credential problem, not a cache one): %v", label, err)
 			}
 		}
 		res := stream.Result()

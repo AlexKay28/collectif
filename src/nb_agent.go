@@ -115,6 +115,11 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 		}
 
 		res, err := streamTurn(ctx, st, cellID, run, p, req)
+		// Usage is salvaged even on the error path. A turn interrupted
+		// mid-generation was still billed for its prompt, and reporting
+		// zero would make an expensive cancelled run look free — which
+		// defeats the point of recording cost first-hand at all.
+		total = total.add(res.Usage)
 		if err != nil {
 			if run.wasInterrupted() || errors.Is(err, context.Canceled) {
 				status = CellInterrupted
@@ -124,8 +129,6 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			}
 			break
 		}
-		total = total.add(res.Usage)
-
 		// The notebook's dollar cap, checked between turns. A model that
 		// keeps calling tools should cost what the user agreed to and then
 		// stop — the turn cap alone bounds iterations, not spend.
@@ -211,6 +214,9 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 		return Result{}, err
 	}
 	defer stream.Close()
+	// Returned alongside any error so the caller can still account for a
+	// partially-billed turn.
+	salvage := func(err error) (Result, error) { return stream.Result(), err }
 
 	// Write through the same accumulator shell cells use, rather than
 	// broadcasting straight to subscribers. Broadcasting alone streams to
@@ -226,7 +232,7 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 			break
 		}
 		if err != nil {
-			return Result{}, err
+			return salvage(err)
 		}
 		switch chunk.Type {
 		case ChunkText, ChunkThinking:

@@ -259,8 +259,20 @@ func anthropicTool(spec ToolSpec) *anthropic.ToolParam {
 	if props, ok := spec.InputSchema["properties"]; ok {
 		schema.Properties = props
 	}
-	if req, ok := spec.InputSchema["required"].([]string); ok {
+	// A schema built in Go yields []string; one decoded from JSON — every
+	// MCP tool in M5 — yields []any. Missing this would send the tool
+	// strict, with additionalProperties false and no required list, so the
+	// validation guarantee dispatchTool relies on would quietly stop
+	// holding.
+	switch req := spec.InputSchema["required"].(type) {
+	case []string:
 		schema.Required = req
+	case []any:
+		for _, v := range req {
+			if s, ok := v.(string); ok {
+				schema.Required = append(schema.Required, s)
+			}
+		}
 	}
 	// additionalProperties has no field of its own on the params struct;
 	// ExtraFields is the documented way to carry the rest of the schema.
@@ -288,9 +300,21 @@ func anthropicMessage(m Message) (anthropic.MessageParam, bool) {
 		case BlockToolResult:
 			blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Text, b.IsError))
 		case BlockThinking:
-			// Not replayed. A stored summary is not the signed block the
-			// API would accept, and other models drop foreign thinking
-			// anyway — see nb_project.go.
+			// Replayed, with its signature, and only when we have one.
+			//
+			// This is required rather than optional: with extended thinking
+			// on, an assistant turn containing tool_use must be echoed back
+			// with its thinking blocks intact and in order, or the API
+			// returns 400 — so every tool-calling cell would fail on its
+			// second turn without this.
+			//
+			// A block with no signature is one reconstructed from a
+			// notebook's stored outputs rather than received on this turn
+			// (see nb_project.go). Those genuinely cannot be replayed: the
+			// text is a summary, not the signed original.
+			if b.Signature != "" {
+				blocks = append(blocks, anthropic.NewThinkingBlock(b.Signature, b.Text))
+			}
 		}
 	}
 	if len(blocks) == 0 {
@@ -323,7 +347,9 @@ func normaliseAnthropicResult(msg *anthropic.Message) Result {
 		case anthropic.TextBlock:
 			res.Content = append(res.Content, ContentBlock{Type: BlockText, Text: v.Text})
 		case anthropic.ThinkingBlock:
-			res.Content = append(res.Content, ContentBlock{Type: BlockThinking, Text: v.Thinking})
+			res.Content = append(res.Content, ContentBlock{
+				Type: BlockThinking, Text: v.Thinking, Signature: v.Signature,
+			})
 		case anthropic.ToolUseBlock:
 			input := map[string]any{}
 			// block.Input is raw JSON; decoding is the documented path and

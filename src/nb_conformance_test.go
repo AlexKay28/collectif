@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // Conformance pass over M2 / M2.5 against ADR 0001 and the phase exit
@@ -293,8 +299,14 @@ func (s *blockingStream) Next() (Chunk, error) {
 	return Chunk{}, s.ctx.Err()
 }
 
+// Result reports usage even though the turn never completed — which is
+// exactly what a real transport does: the prompt was sent and billed before
+// the interrupt arrived.
 func (s *blockingStream) Result() Result {
-	return Result{StopReason: StopEndTurn}
+	return Result{
+		StopReason: StopEndTurn,
+		Usage:      Usage{InputTokens: 4_200, OutputTokens: 17},
+	}
 }
 func (s *blockingStream) Close() error { return nil }
 
@@ -312,4 +324,157 @@ func (st *notebookStore) liveWait(cellID string, timeout time.Duration) <-chan s
 		}
 	}()
 	return ch
+}
+
+// ─── Code-review findings, 7f2cffc..HEAD ────────────────────────────────
+
+// The showstopper. With adaptive thinking on — which we always set — every
+// assistant turn comes back carrying thinking blocks, and the API requires
+// them passed back *unmodified, in order, with their signature intact*
+// whenever the turn also contains tool_use. We kept the text and dropped
+// the signature, then dropped the block entirely, so from turn two onward
+// any tool-calling cell would have failed with a 400.
+//
+// Note the distinction this must preserve: thinking recorded in a
+// notebook's stored outputs is still not replayed (nb_project.go), because
+// that is a summary from a possibly-different model on a possibly-different
+// run. This is about echoing back the turn we just received.
+func TestReview_ThinkingIsReplayedWithItsSignature(t *testing.T) {
+	turn := []ContentBlock{
+		{Type: BlockThinking, Text: "reasoning", Signature: "sig-abc"},
+		{Type: BlockToolUse, ToolUseID: "tu_1", ToolName: "read", ToolInput: map[string]any{"path": "x"}},
+	}
+	params := buildAnthropicRequest(Request{Messages: []Message{
+		userText("do it"),
+		{Role: RoleAssistant, Content: turn},
+		{Role: RoleUser, Content: []ContentBlock{{Type: BlockToolResult, ToolUseID: "tu_1", Text: "contents"}}},
+	}})
+
+	assistant := params.Messages[1]
+	if len(assistant.Content) != 2 {
+		t.Fatalf("assistant turn has %d blocks, want thinking + tool_use: %+v", len(assistant.Content), assistant.Content)
+	}
+	thinking := assistant.Content[0].OfThinking
+	if thinking == nil {
+		t.Fatal("thinking block was dropped — the API rejects a tool_use turn without it")
+	}
+	if thinking.Signature != "sig-abc" {
+		t.Errorf("signature = %q, want it passed back intact", thinking.Signature)
+	}
+	if assistant.Content[1].OfToolUse == nil {
+		t.Error("tool_use block lost")
+	}
+}
+
+func TestReview_NormalisationKeepsTheThinkingSignature(t *testing.T) {
+	msg := &anthropic.Message{StopReason: anthropic.StopReasonToolUse}
+	if err := json.Unmarshal([]byte(`[{"type":"thinking","thinking":"why","signature":"sig-xyz"}]`), &msg.Content); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	res := normaliseAnthropicResult(msg)
+	if len(res.Content) != 1 || res.Content[0].Signature != "sig-xyz" {
+		t.Errorf("signature not carried through normalisation: %+v", res.Content)
+	}
+}
+
+// A prompt cell must render identically whether it is the cell being run or
+// a cell above one. It did not: the target was trimmed and a prefix cell was
+// not, so a textarea's trailing newline made cell 5 byte-different between
+// its own run and cell 6's — and the prefix breakpoint missed, silently, at
+// full price. Exactly the failure #51's gate exists to catch.
+func TestReview_APromptCellRendersIdenticallyAsTargetAndAsPrefix(t *testing.T) {
+	nb, _ := projFixture(t)
+	addProjCell(nb, Cell{ID: "c0", Type: CellPrompt, Source: "the question\n"})
+	addProjCell(nb, Cell{ID: "c1", Type: CellPrompt, Source: "next"})
+
+	asTarget := mustProject(t, nb, 0) // c0 is the cell being run
+	asPrefix := mustProject(t, nb, 1) // c0 is now context above c1
+
+	if len(asTarget) == 0 || len(asPrefix) == 0 {
+		t.Fatal("empty projection")
+	}
+	if got, want := asPrefix[0].Content[0].Text, asTarget[0].Content[0].Text; got != want {
+		t.Errorf("same cell rendered differently:\n as prefix %q\n as target %q\nthe cached prefix would miss every time", got, want)
+	}
+}
+
+// grep computed paths relative to the *unresolved* root while walking a
+// resolved one. Under a symlinked root every hit was filtered out by the
+// glob and reported paths began with ../.. — a path the model cannot feed
+// back into read.
+func TestReview_GrepWorksUnderASymlinkedRoot(t *testing.T) {
+	real := toolRoot(t)
+	link := filepath.Join(t.TempDir(), "linked-root")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	out, isErr := runTool(t, &grepTool{}, link, map[string]any{"pattern": "TODO", "glob": "**/*.go"})
+	if isErr {
+		t.Fatalf("grep failed: %s", out)
+	}
+	if !strings.Contains(out, "src/util.go") {
+		t.Errorf("grep output %q — the glob filtered out every hit under a symlinked root", out)
+	}
+	if strings.Contains(out, "..") {
+		t.Errorf("grep reported a path the model cannot use: %q", out)
+	}
+}
+
+// Usage from a turn that errored or was interrupted was thrown away, so an
+// interrupted cell reported costing nothing while having been fully billed.
+func TestReview_InterruptedTurnStillReportsItsUsage(t *testing.T) {
+	f := newNBFixture(t)
+	withProvider(t, &blockingProvider{emitted: make(chan struct{})})
+	cell := f.addCell(t, "prompt", "long one")
+
+	nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/run", nil)
+	select {
+	case <-f.st.liveWait(cell, 5*time.Second):
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing streamed")
+	}
+	nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/interrupt", nil)
+	c := f.waitForState(t, cell, 10*time.Second)
+
+	if promptTokens(c.Usage) == 0 && c.Usage.OutputTokens == 0 {
+		t.Error("an interrupted cell reported zero usage — the prompt was billed either way")
+	}
+}
+
+// required was read with a []string assertion that only matches how the
+// builtins happen to construct it. A schema arriving through JSON (M5's MCP
+// tools) yields []any, the assertion fails, and the tool goes out strict
+// with no required list — so the validation guarantee quietly stops holding.
+func TestReview_RequiredSurvivesAJSONDecodedSchema(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"type":"object",
+		"properties":{"path":{"type":"string","description":"p"}},
+		"required":["path"],
+		"additionalProperties":false
+	}`), &schema); err != nil {
+		t.Fatal(err)
+	}
+	params := buildAnthropicRequest(Request{
+		Messages: []Message{userText("hi")},
+		Tools:    []ToolSpec{{Name: "read", Description: "d", InputSchema: schema}},
+	})
+	got := params.Tools[0].OfTool.InputSchema.Required
+	if len(got) != 1 || got[0] != "path" {
+		t.Errorf("required = %v from a JSON-decoded schema, want [path]", got)
+	}
+}
+
+// elide split at byte offsets, so any non-ASCII text over budget carried a
+// partial rune at each cut and reached the model as U+FFFD.
+func TestReview_ElideDoesNotSplitRunes(t *testing.T) {
+	text := strings.Repeat("héllo wörld ☃ ", 2000)
+	out := elide(text, 1024)
+	if !utf8.ValidString(out) {
+		t.Error("elide produced invalid UTF-8 — the model sees a mangled boundary")
+	}
+	if strings.Contains(out, "�") {
+		t.Error("elide left a replacement character at a cut")
+	}
 }
