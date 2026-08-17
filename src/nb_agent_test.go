@@ -36,7 +36,11 @@ type fakeProvider struct {
 
 func (f *fakeProvider) Name() string { return "fake" }
 func (f *fakeProvider) Models() []ModelInfo {
-	return []ModelInfo{{ID: "fake-1", ContextWindow: 200_000, MaxOutput: 8_000}}
+	return []ModelInfo{{
+		ID: "fake-1", ContextWindow: 200_000, MaxOutput: 8_000,
+		InputUSDPerMTok: 5, OutputUSDPerMTok: 25,
+		CacheReadUSDPerMTok: 0.5, CacheWriteUSDPerMTok: 6.25,
+	}}
 }
 
 func (f *fakeProvider) Stream(ctx context.Context, req Request) (Stream, error) {

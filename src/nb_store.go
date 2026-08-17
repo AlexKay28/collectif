@@ -456,6 +456,29 @@ func (st *notebookStore) closeSubs() {
 	}
 }
 
+// invalidateBelow marks every finished cell after cellID as stale. Cells
+// that never ran have nothing to invalidate, and a running one is left
+// alone rather than told it is out of date while it is still working.
+func (st *notebookStore) invalidateBelow(cellID string) {
+	doc := st.Doc()
+	i := indexOfCell(doc, cellID)
+	if i < 0 {
+		return
+	}
+	var ids []string
+	for _, c := range doc.Cells[i+1:] {
+		if c.State == CellOK || c.State == CellError || c.State == CellInterrupted {
+			ids = append(ids, c.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if _, err := st.Append(evCellsInvalidated, cellsInvalidatedPayload{CellIDs: ids}); err != nil {
+		logNotebookErr(st, cellID, "invalidate downstream cells", err)
+	}
+}
+
 // ─── Registry ───────────────────────────────────────────────────────────
 
 // One shared store per slug, so two browser tabs fold the same document

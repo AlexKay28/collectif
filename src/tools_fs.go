@@ -206,7 +206,16 @@ func (t *grepTool) Run(ctx context.Context, in map[string]any, root string) (str
 		return fmt.Sprintf("grep: invalid pattern %q: %v", pattern, err), true, nil
 	}
 
-	base := root
+	// Walk and report against the *resolved* root. containedPath resolves
+	// symlinks, so mixing a resolved walk with an unresolved root made
+	// filepath.Rel return ../../real/... under a symlinked root: the glob
+	// filter then matched nothing and the paths printed were ones the model
+	// could not feed back into read.
+	resolvedRoot, err := containedPath(root, ".")
+	if err != nil {
+		return fmt.Sprintf("grep: %v", err), true, nil
+	}
+	base := resolvedRoot
 	if sub := argString(in, "path"); sub != "" {
 		abs, err := containedPath(root, sub)
 		if err != nil {
@@ -230,7 +239,7 @@ func (t *grepTool) Run(ctx context.Context, in map[string]any, root string) (str
 		if _, err := containedPath(root, path); err != nil {
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
+		rel, relErr := filepath.Rel(resolvedRoot, path)
 		if relErr != nil {
 			return nil
 		}
@@ -273,7 +282,11 @@ func (t *grepTool) Run(ctx context.Context, in map[string]any, root string) (str
 // Absolute or escaping patterns match nothing rather than reaching out:
 // the tool's whole surface is the working directory.
 func walkMatch(root, pattern, sub string) ([]string, error) {
-	base := root
+	resolvedRoot, err := containedPath(root, ".")
+	if err != nil {
+		return nil, err
+	}
+	base := resolvedRoot
 	if sub != "" {
 		abs, err := containedPath(root, sub)
 		if err != nil {
@@ -282,14 +295,14 @@ func walkMatch(root, pattern, sub string) ([]string, error) {
 		base = abs
 	}
 	var out []string
-	err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil //nolint:nilerr
 		}
 		if _, err := containedPath(root, path); err != nil {
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
+		rel, relErr := filepath.Rel(resolvedRoot, path)
 		if relErr != nil {
 			return nil
 		}

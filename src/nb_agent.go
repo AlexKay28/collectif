@@ -64,6 +64,29 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 		effort = doc.Meta.Effort
 	}
 
+	// The projected prefix is what two runs of this cell share. Turns the
+	// loop appends below are new every time.
+	stablePrefix := len(msgs)
+
+	// Resolve the model's budgets once. ADR §4.4 names three, doing three
+	// different jobs: max_tokens is a hard per-response cap the model
+	// cannot see, the notebook's dollar cap is ours and is checked between
+	// turns, and the model-facing task budget is a later addition.
+	info := modelInfoFor(p, model)
+	budgetUSD := doc.Meta.BudgetUSD
+
+	// A budget we cannot price is not a budget. Running anyway would honour
+	// the letter of the setting and none of its intent — the user asked for
+	// a spend cap, and silently not enforcing one is how a surprise bill
+	// happens.
+	if budgetUSD > 0 && info.InputUSDPerMTok == 0 && info.OutputUSDPerMTok == 0 {
+		st.emitError(cellID, run.runID, fmt.Sprintf(
+			"This notebook has a $%.2f budget, but no pricing is known for model %q, so the budget cannot be enforced. "+
+				"Remove the budget to run without one.", budgetUSD, info.ID))
+		st.finishRunWithUsage(cellID, run.runID, CellError, Usage{})
+		return
+	}
+
 	var total Usage
 	status := CellOK
 
@@ -73,14 +96,30 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			break
 		}
 
-		res, err := streamTurn(ctx, st, cellID, run, p, Request{
-			Model:     model,
-			System:    notebookSystemPrompt(doc),
-			Messages:  msgs,
-			Tools:     toolSpecs(),
-			MaxTokens: defaultMaxTokens,
-			Effort:    effort,
-		})
+		// Pre-flight. Owning the loop means the size is known before the
+		// request is sent, so an oversized projection is an explicit error
+		// rather than something the API silently truncates (ADR §4.8).
+		req := Request{
+			Model:                model,
+			System:               notebookSystemPrompt(doc),
+			Messages:             msgs,
+			Tools:                toolSpecs(),
+			MaxTokens:            defaultMaxTokens,
+			Effort:               effort,
+			StablePrefixMessages: stablePrefix,
+		}
+		if err := checkRequestFits(info, req); err != nil {
+			st.emitError(cellID, run.runID, err.Error())
+			status = CellError
+			break
+		}
+
+		res, err := streamTurn(ctx, st, cellID, run, p, req)
+		// Usage is salvaged even on the error path. A turn interrupted
+		// mid-generation was still billed for its prompt, and reporting
+		// zero would make an expensive cancelled run look free — which
+		// defeats the point of recording cost first-hand at all.
+		total = total.add(res.Usage)
 		if err != nil {
 			if run.wasInterrupted() || errors.Is(err, context.Canceled) {
 				status = CellInterrupted
@@ -90,7 +129,18 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 			}
 			break
 		}
-		total = total.add(res.Usage)
+		// The notebook's dollar cap, checked between turns. A model that
+		// keeps calling tools should cost what the user agreed to and then
+		// stop — the turn cap alone bounds iterations, not spend.
+		if budgetUSD > 0 {
+			if spent := usageCostUSD(info, total); spent >= budgetUSD {
+				st.emitError(cellID, run.runID, fmt.Sprintf(
+					"Stopped after spending $%.4f of this notebook's $%.2f budget. "+
+						"Raise the budget in notebook settings to continue.", spent, budgetUSD))
+				status = CellError
+				break
+			}
+		}
 
 		// Check the stop reason before touching content: a refusal arrives
 		// as a successful response with nothing in it.
@@ -144,6 +194,15 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 	if run.wasInterrupted() {
 		status = CellInterrupted
 	}
+	if status == CellInterrupted {
+		// ADR §4.4: a cancelled run finalises whatever it has. The turn
+		// never completed, so nothing was recorded from its blocks — the
+		// streamed text is all there is, and discarding it would throw
+		// away the part the user was actually reading.
+		if partial := st.liveText(cellID, run.runID); strings.TrimSpace(partial) != "" {
+			st.emitOutput(cellID, run.runID, Output{Type: OutputText, Text: partial})
+		}
+	}
 	st.finishRunWithUsage(cellID, run.runID, status, total)
 }
 
@@ -155,6 +214,17 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 		return Result{}, err
 	}
 	defer stream.Close()
+	// Returned alongside any error so the caller can still account for a
+	// partially-billed turn.
+	salvage := func(err error) (Result, error) { return stream.Result(), err }
+
+	// Write through the same accumulator shell cells use, rather than
+	// broadcasting straight to subscribers. Broadcasting alone streams to
+	// whoever is already watching and leaves nothing for a client that
+	// joins mid-turn — so a refresh during a long model turn showed an
+	// empty cell, the exact failure M1 fixed for shell cells and this path
+	// quietly did not inherit.
+	out := &deltaWriter{st: st, cellID: cellID, runID: run.runID}
 
 	for {
 		chunk, err := stream.Next()
@@ -162,16 +232,16 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 			break
 		}
 		if err != nil {
-			return Result{}, err
+			return salvage(err)
 		}
 		switch chunk.Type {
 		case ChunkText, ChunkThinking:
 			if chunk.Text != "" {
-				st.broadcastDelta(cellID, run.runID, chunk.Text)
+				out.write(chunk.Text)
 			}
 		case ChunkToolUse:
 			if chunk.ToolCall != nil {
-				st.broadcastDelta(cellID, run.runID, "\n→ "+chunk.ToolCall.Name+"\n")
+				out.write("\n→ " + chunk.ToolCall.Name + "\n")
 			}
 		}
 	}
@@ -228,6 +298,20 @@ func toolNames() []string {
 		return []string{"(none configured)"}
 	}
 	return names
+}
+
+// modelInfoFor looks a model up in the provider's own catalog, falling back
+// to a conservative window so a model we do not recognise still gets a
+// pre-flight check rather than none.
+func modelInfoFor(p Provider, model string) ModelInfo {
+	if p != nil {
+		for _, m := range p.Models() {
+			if m.ID == model || (model == "" && len(p.Models()) > 0) {
+				return m
+			}
+		}
+	}
+	return ModelInfo{ID: model, ContextWindow: defaultContextLimit}
 }
 
 // notebookSystemPrompt states where the agent is and what it is working in.
