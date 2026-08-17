@@ -172,3 +172,142 @@ func TestListNotebooks_DoesNotPinEveryNotebookOpen(t *testing.T) {
 		t.Errorf("listing opened and pinned %d notebooks; a launcher must not hold every log open", after)
 	}
 }
+
+// ─── Findings from the M0/M1 code review ────────────────────────────────
+
+// Append folds before it writes, so a failed write must not leave the
+// in-memory document ahead of the log. Otherwise Doc(), GET /api/nb/<id>
+// and the WS fold all report a mutation that is not durable and that no
+// client ever saw.
+func TestStore_FailedWriteDoesNotAdvanceTheDocument(t *testing.T) {
+	st, _ := newTestStore(t)
+	if _, err := st.Append(evCellInserted, cellInsertedPayload{Cell: Cell{ID: "c1", Type: CellShell}}); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	before := st.Doc()
+
+	// Break the log underneath the store without marking it closed, the
+	// way ENOSPC or an EIO would.
+	st.mu.Lock()
+	_ = st.log.Close()
+	st.mu.Unlock()
+
+	if _, err := st.Append(evCellInserted, cellInsertedPayload{Cell: Cell{ID: "c2", Type: CellShell}}); err == nil {
+		t.Fatal("expected the append to fail once the log is unwritable")
+	}
+
+	after := st.Doc()
+	if after.Version != before.Version {
+		t.Errorf("Version = %d after a failed write, want %d — the document ran ahead of the log",
+			after.Version, before.Version)
+	}
+	if len(after.Cells) != len(before.Cells) {
+		t.Errorf("cells = %d after a failed write, want %d", len(after.Cells), len(before.Cells))
+	}
+}
+
+// A cell has to be insertable at the top. afterCellId alone cannot express
+// it: empty means "append", so inserting above the first cell silently put
+// the new cell at the bottom.
+func TestFold_InsertBeforeCellPlacesAtThatIndex(t *testing.T) {
+	evs := createdEvents(t)
+	evs = append(evs,
+		ev(t, "e2", evCellInserted, cellInsertedPayload{Cell: Cell{ID: "c1", Type: CellShell}}),
+		ev(t, "e3", evCellInserted, cellInsertedPayload{Cell: Cell{ID: "c2", Type: CellShell}}),
+		// Above the first cell.
+		ev(t, "e4", evCellInserted, cellInsertedPayload{
+			Cell: Cell{ID: "c0", Type: CellShell}, BeforeCellID: "c1",
+		}),
+		// Between them.
+		ev(t, "e5", evCellInserted, cellInsertedPayload{
+			Cell: Cell{ID: "cmid", Type: CellShell}, BeforeCellID: "c2",
+		}),
+	)
+	nb, err := foldEvents(evs)
+	if err != nil {
+		t.Fatalf("foldEvents: %v", err)
+	}
+	if got, want := cellIDs(nb), []string{"c0", "c1", "cmid", "c2"}; !equalStrings(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+func TestNotebookAPI_InsertBeforeFirstCell(t *testing.T) {
+	f := newNBFixture(t)
+	first := f.addCell(t, "shell", "original first")
+
+	rec := nbRequest(t, f.srv, http.MethodPost, f.base+"/cells",
+		map[string]any{"type": "shell", "source": "new top", "beforeCellId": first})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("insert before: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		CellID string `json:"cellId"`
+	}
+	decodeJSON(t, rec, &out)
+
+	doc := f.st.Doc()
+	if got, want := cellIDs(doc), []string{out.CellID, first}; !equalStrings(got, want) {
+		t.Errorf("order = %v, want the new cell first", got)
+	}
+}
+
+// Past the output cap the store stops accumulating; it must also stop
+// telling the writer to broadcast, or a `yes` keeps pushing frames at every
+// subscriber forever.
+func TestAppendLive_StopsAcceptingPastTheCap(t *testing.T) {
+	st, _ := newTestStore(t)
+	chunk := strings.Repeat("x", 64*1024)
+
+	accepted := 0
+	for i := 0; i < 8; i++ { // 512 KiB against a 256 KiB cap
+		if st.appendLive("c1", "r1", chunk) {
+			accepted++
+		}
+	}
+	if accepted == 8 {
+		t.Error("every chunk was accepted past the cap — output would broadcast without bound")
+	}
+	if got := len(st.liveText("c1", "r1")); got > maxCellOutput+128 {
+		t.Errorf("live text = %d bytes, want it capped near %d", got, maxCellOutput)
+	}
+}
+
+// The handlers arm a 60s read deadline and re-arm it from the pong
+// handler, but nothing was ever sending pings — so a one-directional
+// socket (the notebook and dashboard streams both are, by design) was torn
+// down by the server every minute and silently reconnected.
+func TestWSSub_SendsPingsSoIdleSocketsSurvive(t *testing.T) {
+	prev := wsPingEvery
+	wsPingEvery = 50 * time.Millisecond
+	t.Cleanup(func() { wsPingEvery = prev })
+
+	f := newNBFixture(t)
+	conn, closeWS := f.dialWS(t)
+	defer closeWS()
+
+	got := make(chan struct{}, 1)
+	conn.SetPingHandler(func(string) error {
+		select {
+		case got <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	// ReadMessage is what dispatches control frames to the handler.
+	go func() {
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no ping within 5s — an idle socket would hit the 60s read deadline and be dropped")
+	}
+}

@@ -33,14 +33,21 @@
 <script type="module">
 import { state, nbAPI, openNotebook, onChange } from "./nb.js";
 import { mountCells, showError } from "./nb_cells.js";
+import { escapeHTML } from "./nb_render.js";
 
 const picker = document.getElementById("nb-picker");
 const rootLabel = document.getElementById("nb-root");
 
 async function refreshList(selectID) {
   const list = await nbAPI.list();
+  // Titles are free-form user input and land in innerHTML, so they are
+  // escaped like every other rendered string. Unescaped, a title such as
+  // `"><img src=x onerror=...>` would run on every load of this page —
+  // with the auth token sitting in location.search.
   picker.innerHTML = list.length
-    ? list.map((n) => `<option value="${n.id}">${n.title || n.id}</option>`).join("")
+    ? list
+        .map((n) => `<option value="${escapeHTML(n.id)}">${escapeHTML(n.title || n.id)}</option>`)
+        .join("")
     : `<option value="">no notebooks yet</option>`;
   const want = selectID || state.id || (list[0] && list[0].id);
   if (want) {

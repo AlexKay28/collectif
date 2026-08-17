@@ -192,9 +192,20 @@ func runShellCell(ctx context.Context, st *notebookStore, cellID, source, root s
 	done := make(chan struct{})
 	go func() {
 		select {
-		case <-ctx.Done():
-			killProcessGroup(cmd)
 		case <-done:
+			// Finished normally. Check done first and return without
+			// looking at ctx: runShellCell cancels the context on the way
+			// out, so both cases are ready at once on the happy path and a
+			// random pick would kill a pid Wait() has already reaped —
+			// which, once pids recycle, is someone else's process group.
+			return
+		case <-ctx.Done():
+			select {
+			case <-done: // raced us to the exit; nothing to kill
+				return
+			default:
+			}
+			killProcessGroup(cmd)
 		}
 	}()
 
@@ -276,8 +287,11 @@ func (d *deltaWriter) Write(p []byte) (int, error) {
 }
 
 func (d *deltaWriter) write(s string) {
-	d.st.appendLive(d.cellID, d.runID, s)
-	d.st.broadcastDelta(d.cellID, d.runID, s)
+	// Stop broadcasting when the store stops accepting: past the cap the
+	// text is going nowhere, and pushing it anyway floods every subscriber.
+	if d.st.appendLive(d.cellID, d.runID, s) {
+		d.st.broadcastDelta(d.cellID, d.runID, s)
+	}
 }
 
 func (d *deltaWriter) text() string {

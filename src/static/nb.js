@@ -95,8 +95,14 @@ function applyEvent(nb, ev) {
     case "cell_inserted": {
       const cell = p.cell;
       if (!cell.state) cell.state = "idle";
+      // Mirrors applyEvent in nb_doc.go: beforeCellId wins, then
+      // afterCellId, then append. The two must agree or the client drifts
+      // from the server until the next fold.
       let at = nb.cells.length;
-      if (p.afterCellId) {
+      if (p.beforeCellId) {
+        const i = cellIndex(nb, p.beforeCellId);
+        if (i >= 0) at = i;
+      } else if (p.afterCellId) {
         const i = cellIndex(nb, p.afterCellId);
         if (i >= 0) at = i + 1;
       }

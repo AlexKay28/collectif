@@ -80,8 +80,9 @@ type notebookStore struct {
 
 // liveOutput is the un-persisted, in-progress output of one run.
 type liveOutput struct {
-	RunID string `json:"runId"`
-	Text  string `json:"text"`
+	RunID  string `json:"runId"`
+	Text   string `json:"text"`
+	capped bool   `json:"-"` // cap reached; stop accepting and stop broadcasting
 }
 
 func (st *notebookStore) logPath() string  { return filepath.Join(st.dir, st.slug+".jsonl") }
@@ -230,8 +231,16 @@ func (st *notebookStore) Append(typ string, payload any) (Event, error) {
 		return Event{}, fmt.Errorf("notebook %s is closed", st.slug)
 	}
 
-	// Fold before writing so a rejected event never reaches the log.
-	if err := applyEvent(st.nb, e); err != nil {
+	// Fold into a copy, write, then publish. Two failures have to be
+	// impossible and this ordering rules out both: an event the fold
+	// rejects must never reach the log, and an event the log rejects must
+	// never reach the document. Folding in place would satisfy the first
+	// and break the second — a failed write (ENOSPC, EIO, a log removed
+	// underneath a still-open store) would leave Doc(), the HTTP read and
+	// the WS fold all reporting a mutation that is not durable and that no
+	// client ever saw.
+	next := st.nb.clone()
+	if err := applyEvent(next, e); err != nil {
 		st.mu.Unlock()
 		return Event{}, err
 	}
@@ -239,6 +248,7 @@ func (st *notebookStore) Append(typ string, payload any) (Event, error) {
 		st.mu.Unlock()
 		return Event{}, fmt.Errorf("append to notebook log: %w", err)
 	}
+	st.nb = next
 
 	// The position this event was applied at — see broadcastEvent.
 	seq := st.nb.Version
@@ -360,7 +370,13 @@ func (st *notebookStore) broadcastDelta(cellID, runID, text string) {
 
 // appendLive accumulates a running cell's output, capped so a runaway
 // command costs a truncated cell rather than the process.
-func (st *notebookStore) appendLive(cellID, runID, text string) {
+//
+// Reports whether the text was accepted. Past the cap it returns false and
+// the caller stops broadcasting too: a `yes` or a chatty build would
+// otherwise keep pushing frames at every subscriber forever, held back only
+// by the drop queue — that is, by corrupting the live view instead of
+// ending it.
+func (st *notebookStore) appendLive(cellID, runID, text string) bool {
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
 	if st.liveOut == nil {
@@ -371,14 +387,19 @@ func (st *notebookStore) appendLive(cellID, runID, text string) {
 		cur = &liveOutput{RunID: runID}
 		st.liveOut[cellID] = cur
 	}
-	if len(cur.Text) >= maxCellOutput {
-		return
+	if cur.capped {
+		return false
 	}
-	if room := maxCellOutput - len(cur.Text); len(text) > room {
-		cur.Text += text[:room] + "\n… output truncated at 256 KiB …\n"
-		return
+	if room := maxCellOutput - len(cur.Text); len(text) >= room {
+		if room > 0 {
+			cur.Text += text[:room]
+		}
+		cur.Text += "\n… output truncated at 256 KiB …\n"
+		cur.capped = true
+		return true // the truncation notice itself is worth streaming
 	}
 	cur.Text += text
+	return true
 }
 
 func (st *notebookStore) liveText(cellID, runID string) string {

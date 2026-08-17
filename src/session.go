@@ -310,11 +310,37 @@ func newWSSub(c *websocket.Conn, kind, queue int) *wsSub {
 	return sub
 }
 
+// wsPingEvery must stay comfortably under the 60s read deadline the
+// handlers arm, so a pong lands before the deadline expires. A var so a
+// test can drive the keepalive without waiting half a minute.
+var wsPingEvery = 25 * time.Second
+
 func (w *wsSub) pump() {
-	for msg := range w.out {
-		if err := w.c.WriteMessage(w.kind, msg); err != nil {
-			w.stop()
-			return
+	// Ping on a timer as well as draining the queue. The handlers set a 60s
+	// read deadline and re-arm it from the pong handler, but nothing was
+	// ever sending pings — so a socket with no inbound traffic (the
+	// dashboard and notebook streams are one-directional by design) was
+	// torn down by the server every 60 seconds, reconnected by the client,
+	// and blind for the round trip each time.
+	ticker := time.NewTicker(wsPingEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case msg, ok := <-w.out:
+			if !ok {
+				return // closed by stop()
+			}
+			if err := w.c.WriteMessage(w.kind, msg); err != nil {
+				w.stop()
+				return
+			}
+		case <-ticker.C:
+			// pump is the only writer, so writing a control frame here
+			// needs no extra synchronisation.
+			if err := w.c.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				w.stop()
+				return
+			}
 		}
 	}
 }
@@ -556,27 +582,27 @@ func (s *Session) toJSON() map[string]any {
 		toolTok = s.OutputTokens - thinkTok - textTok
 	}
 	return map[string]any{
-		"id":                   s.ID,
-		"sessionId":            s.SessionID,
-		"cli":                  cli,
-		"cwd":                  s.Cwd,
-		"prompt":               s.Prompt,
-		"status":               s.Status,
-		"lastActivity":         s.LastActivity,
-		"lastTool":             s.LastTool,
-		"currentTask":          s.CurrentTask,
-		"taskHistory":          history,
-		"toolCounts":           toolCounts,
-		"activity":             activity,
-		"transcriptPath":       s.TranscriptPath,
-		"pending":              pending,
-		"menuOptions":          append([]MenuOption(nil), s.MenuOptions...),
-		"askQuestion":          s.AskQuestion,
-		"inputTokens":          s.InputTokens,
-		"outputTokens":         s.OutputTokens,
-		"cacheReadTokens":      s.CacheReadTokens,
-		"cacheCreationTokens":  s.CacheCreationTokens,
-		"messageCount":         s.MessageCount,
+		"id":                  s.ID,
+		"sessionId":           s.SessionID,
+		"cli":                 cli,
+		"cwd":                 s.Cwd,
+		"prompt":              s.Prompt,
+		"status":              s.Status,
+		"lastActivity":        s.LastActivity,
+		"lastTool":            s.LastTool,
+		"currentTask":         s.CurrentTask,
+		"taskHistory":         history,
+		"toolCounts":          toolCounts,
+		"activity":            activity,
+		"transcriptPath":      s.TranscriptPath,
+		"pending":             pending,
+		"menuOptions":         append([]MenuOption(nil), s.MenuOptions...),
+		"askQuestion":         s.AskQuestion,
+		"inputTokens":         s.InputTokens,
+		"outputTokens":        s.OutputTokens,
+		"cacheReadTokens":     s.CacheReadTokens,
+		"cacheCreationTokens": s.CacheCreationTokens,
+		"messageCount":        s.MessageCount,
 		// #38 Approximate per-block-type split of OutputTokens. See the
 		// comment above and the tooltip in dashboard.js. The three
 		// *Tokens fields always sum to outputTokens; the *Chars fields

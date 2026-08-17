@@ -194,10 +194,11 @@ func handleCellInsert(w http.ResponseWriter, r *http.Request, st *notebookStore)
 		return
 	}
 	var req struct {
-		Type        CellType `json:"type"`
-		Source      string   `json:"source"`
-		Meta        CellMeta `json:"meta"`
-		AfterCellID string   `json:"afterCellId"`
+		Type         CellType `json:"type"`
+		Source       string   `json:"source"`
+		Meta         CellMeta `json:"meta"`
+		AfterCellID  string   `json:"afterCellId"`
+		BeforeCellID string   `json:"beforeCellId"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -213,7 +214,9 @@ func handleCellInsert(w http.ResponseWriter, r *http.Request, st *notebookStore)
 		Meta:   req.Meta,
 		State:  CellIdle,
 	}
-	if _, err := st.Append(evCellInserted, cellInsertedPayload{Cell: cell, AfterCellID: req.AfterCellID}); err != nil {
+	if _, err := st.Append(evCellInserted, cellInsertedPayload{
+		Cell: cell, AfterCellID: req.AfterCellID, BeforeCellID: req.BeforeCellID,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
