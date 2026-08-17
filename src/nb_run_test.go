@@ -219,14 +219,22 @@ func TestRunCell_MarkdownIsNotExecutable(t *testing.T) {
 	}
 }
 
-func TestRunCell_PromptAndFileAreNotImplementedYet(t *testing.T) {
+// #50 replaced M1's blanket 501 on prompt and file cells. They are now two
+// different things and the responses say so: a prompt cell is runnable and
+// only lacks a configured provider, while a file cell is context that is
+// read during projection and has nothing of its own to run.
+func TestRunCell_PromptNeedsAProviderAndFileIsNotRunnable(t *testing.T) {
 	f := newNBFixture(t)
-	for _, typ := range []string{"prompt", "file"} {
-		cell := f.addCell(t, typ, "whatever")
-		rec := nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/run", nil)
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("run %s: got %d, want 501 until M2 lands the loop", typ, rec.Code)
-		}
+	withProvider(t, nil)
+
+	prompt := f.addCell(t, "prompt", "ask something")
+	if rec := nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+prompt+"/run", nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("run prompt with no provider: got %d, want 503", rec.Code)
+	}
+
+	file := f.addCell(t, "file", "notes.txt")
+	if rec := nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+file+"/run", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("run file: got %d, want 400 — a file cell is projected, not run", rec.Code)
 	}
 }
 

@@ -227,3 +227,40 @@ html, body {
 #nb-keys b { color: var(--nb-ink); font-weight: 600; }
 
 :focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
+
+/* #50 — agent-loop outputs: reasoning, tool calls, tool results. */
+.out.think { padding: 0; background: transparent; border-color: transparent; }
+.out.think > summary {
+  cursor: pointer;
+  font: 11px var(--nb-mono);
+  color: var(--nb-muted);
+  padding: 4px 0;
+  list-style: none;
+}
+.out.think > summary::before { content: "▸ "; }
+.out.think[open] > summary::before { content: "▾ "; }
+.out.think > pre {
+  font: 12px/1.5 var(--nb-mono);
+  color: var(--nb-muted);
+  background: #0b0c0e;
+  border: 1px solid var(--nb-rule);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+}
+.out.tool {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 12px var(--nb-mono);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--nb-accent);
+  border-radius: 0;
+  padding: 4px 0 4px 10px;
+  margin: 8px 0 0;
+}
+.out.tool .tool-name { color: var(--nb-accent); }
+.out.tool .tool-args { color: var(--nb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.out.toolres { border-left: 2px solid var(--nb-rule); border-radius: 0 4px 4px 0; }

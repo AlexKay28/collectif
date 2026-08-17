@@ -131,6 +131,20 @@ function renderOutput(o) {
       return `<pre class="out err">${escapeHTML(o.text || "")}</pre>`;
     case "diff":
       return renderDiff(o.text || "");
+    case "thinking":
+      // Reasoning is a summary, not the raw chain of thought — the API
+      // never returns that. Collapsed by default: it is context for when an
+      // answer surprises you, not the answer.
+      return `<details class="out think"><summary>reasoning</summary><pre>${escapeHTML(o.text || "")}</pre></details>`;
+    case "tool_call": {
+      const input = o.data && o.data.input ? JSON.stringify(o.data.input) : "";
+      return `<div class="out tool"><span class="tool-name">→ ${escapeHTML(o.text || "")}</span>` +
+             (input ? `<span class="tool-args">${escapeHTML(input)}</span>` : "") + `</div>`;
+    }
+    case "tool_result": {
+      const bad = o.data && o.data.isError;
+      return `<pre class="out toolres${bad ? " err" : ""}">${escapeHTML(o.text || "")}</pre>`;
+    }
     // thinking / tool_call / tool_result / image / subagent / approval are
     // declared in the schema but not produced until M2+. Render their text
     // rather than dropping them, so a notebook from a newer build is
