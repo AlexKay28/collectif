@@ -31,8 +31,18 @@ func TestDev_ReplayTranscriptIntoANotebook(t *testing.T) {
 	defer f.Close()
 
 	root, _ := os.Getwd()
-	st, err := openSessionNotebook("replay-"+os.Getenv("COLLECTIF_REPLAY_ID"), "claude", root,
-		Capabilities{TranscriptContent: true})
+	// COLLECTIF_REPLAY_CLI lets the harness pretend the transcript came
+	// from another CLI, which is how the degraded surfaces get looked at
+	// without installing codex.
+	cli := os.Getenv("COLLECTIF_REPLAY_CLI")
+	if cli == "" {
+		cli = "claude"
+	}
+	caps := Capabilities{TranscriptContent: true}
+	if a := adapters[cli]; a != nil {
+		caps = a.Capabilities()
+	}
+	st, err := openSessionNotebook("replay-"+os.Getenv("COLLECTIF_REPLAY_ID"), cli, root, caps)
 	if err != nil {
 		t.Fatalf("open notebook: %v", err)
 	}

@@ -42,6 +42,7 @@
           <button id="doc-term" type="button" title="Open the raw terminal">terminal</button>
         </span>
       </div>
+      <div id="nb-fidelity" style="display:none"></div>
       <main id="nb-cells"></main>
     </section>
   </div>
@@ -246,6 +247,36 @@ function renderSessions() {
     sess.filter((a) => a.status === "running").length;
 }
 
+// What this notebook can actually show. Stated once, at the top, in terms
+// of what you can do rather than which capability flags are set — and only
+// when something is missing, because a banner that appears on every
+// notebook is a banner nobody reads.
+const fidelityBar = document.getElementById("nb-fidelity");
+
+function renderFidelity(nb) {
+  const f = nb?.fidelity;
+  if (!f || (f.turns && f.approvals && f.send)) {
+    fidelityBar.style.display = "none";
+    return;
+  }
+  const missing = [];
+  if (!f.turns) missing.push("its turns are not shown here — collectif cannot read <b>" +
+    escapeHTML(f.cli) + "</b>'s transcript format");
+  if (!f.approvals) missing.push("permission requests will not appear here");
+  if (!f.usage) missing.push("token counts are unavailable");
+
+  const can = [];
+  if (f.send) can.push("send prompts");
+  if (f.turns) can.push("read its turns");
+  if (f.approvals) can.push("answer its questions");
+
+  fidelityBar.style.display = "";
+  fidelityBar.innerHTML =
+    `<div class="what"><b>Partial view of this ${escapeHTML(f.cli)} session.</b> ` +
+    missing.join("; ") + `.</div>` +
+    (can.length ? `<div class="can">You can still ${can.join(" and ")} — use the terminal for the rest.</div>` : "");
+}
+
 function shortPath(p) {
   if (!p) return "";
   const home = "/home/";
@@ -297,6 +328,8 @@ onChange(() => {
   const nb = state.notebook;
   docTitle.textContent = nb?.title || "";
   docRoot.textContent = nb?.root ? shortPath(nb.root) : "";
+
+  renderFidelity(nb);
 
   const sid = nb?.meta?.sessionId || "";
   docLive.style.display = sid ? "" : "none";

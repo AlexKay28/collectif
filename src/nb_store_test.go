@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,4 +264,115 @@ func readLines(t *testing.T, path string) []string {
 		t.Fatalf("scan %s: %v", path, err)
 	}
 	return out
+}
+
+// #47 P2 — found while regenerating a replay notebook with a server still
+// holding it open.
+//
+// load() trusts a snapshot whose version is <= len(events) and replays the
+// remaining events on top. That is only valid if the snapshot is a fold of
+// *this* log's first Version events, and nothing checked it. When two
+// processes own one notebook directory — or a log is rewritten, or a
+// snapshot restored from a backup — the snapshot summarises a different
+// history, the tail is replayed onto the wrong base, and the document
+// served is silently wrong.
+//
+// It is not a hypothetical: a stale snapshot cost a real notebook its
+// entire Meta block, so the document claimed to be attached to no session
+// while its log plainly said otherwise. ADR 0001 §4.3 calls the snapshot
+// "derived and disposable"; that is only true if a snapshot we cannot
+// verify is thrown away.
+func TestNotebookStore_ASnapshotFromAnotherHistoryIsDiscarded(t *testing.T) {
+	dir := withTempNotebooks(t)
+
+	st, err := createNotebook("Divergent", t.TempDir())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	slug := st.slug
+	meta := NotebookMeta{SessionID: "the-real-session", CLI: "claude"}
+	if _, err := st.Append(evMetaSet, metaSetPayload{Meta: &meta}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := st.Append(evCellInserted, cellInsertedPayload{
+			Cell: Cell{ID: fmt.Sprintf("c%d", i), Type: CellMarkdown, Source: "real"},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	want := st.Doc()
+	if err := releaseNotebook(slug); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	// A snapshot from a different history: same notebook id, a plausible
+	// version, and content that never came from this log. Exactly the shape
+	// a second process writing the same directory produces.
+	imposter := notebookSnapshot{
+		Version: 2,
+		Notebook: &Notebook{
+			ID: want.ID, Title: want.Title, Root: want.Root,
+			Cells: []Cell{{ID: "ghost", Type: CellMarkdown, Source: "from another timeline"}},
+			// Note the empty Meta — this is what the real incident lost.
+			Version: 2,
+		},
+	}
+	b, err := json.Marshal(imposter)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, slug+".snap.json"), b, 0o644); err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+
+	reopened, err := acquireNotebook(slug)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	got := reopened.Doc()
+
+	if got.Meta.SessionID != "the-real-session" {
+		t.Errorf("Meta.SessionID = %q, want the-real-session — the log said so and the snapshot was believed instead",
+			got.Meta.SessionID)
+	}
+	for _, c := range got.Cells {
+		if c.ID == "ghost" {
+			t.Error("a cell from another history survived into the document")
+		}
+	}
+	if len(got.Cells) != len(want.Cells) {
+		t.Errorf("got %d cells, want %d", len(got.Cells), len(want.Cells))
+	}
+}
+
+// The fast path has to keep working, or every open re-folds the whole log.
+func TestNotebookStore_AMatchingSnapshotIsStillUsed(t *testing.T) {
+	withTempNotebooks(t)
+	st, err := createNotebook("Matching", t.TempDir())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	slug := st.slug
+	for i := 0; i < 3; i++ {
+		if _, err := st.Append(evCellInserted, cellInsertedPayload{
+			Cell: Cell{ID: fmt.Sprintf("c%d", i), Type: CellMarkdown, Source: "kept"},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	want := st.Doc()
+	if err := releaseNotebook(slug); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	reopened, err := acquireNotebook(slug)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	got := reopened.Doc()
+	if len(got.Cells) != len(want.Cells) || got.Version != want.Version {
+		t.Errorf("reopened as %d cells / version %d, want %d / %d",
+			len(got.Cells), got.Version, len(want.Cells), want.Version)
+	}
 }

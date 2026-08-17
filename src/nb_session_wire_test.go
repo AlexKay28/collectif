@@ -81,33 +81,47 @@ func TestSessionNotebook_RootIsTheSessionsWorkingDirectory(t *testing.T) {
 
 // ADR 0002 D11. codex and opencode cannot project content yet. The
 // notebook still opens — a session should not be unreachable because its
-// CLI is less instrumented — but it must say what is missing rather than
-// presenting an empty document that reads as "the agent did nothing".
-func TestSessionNotebook_DegradedAdapterExplainsItself(t *testing.T) {
+// CLI is less instrumented — and the gap is stated in the document's
+// fidelity block.
+//
+// P0 wrote a markdown cell here instead. #47 P2 replaced it: that put a
+// claim about the *build* permanently into a *document*, where it would
+// still assert "codex turns are not shown" long after someone wrote the
+// parser. The fidelity block is derived on every read and cannot go stale.
+func TestSessionNotebook_DegradedAdapterDeclaresItsGaps(t *testing.T) {
 	withTempNotebooks(t)
 
-	st, err := openSessionNotebook("agent-degraded", "codex", t.TempDir(), Capabilities{TranscriptContent: false})
+	st, err := openSessionNotebook("agent-degraded", "codex", t.TempDir(), adapters["codex"].Capabilities())
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	cells := st.Doc().Cells
-	if len(cells) == 0 {
-		t.Fatal("a degraded session's notebook is empty — indistinguishable from an agent that did nothing")
+	doc := st.Doc()
+
+	if len(doc.Cells) != 0 {
+		t.Errorf("the explanation was written into the document as %d cells", len(doc.Cells))
 	}
-	if cells[0].Type != CellMarkdown {
-		t.Errorf("the explanation is type %q, want markdown", cells[0].Type)
+	if doc.Fidelity == nil {
+		t.Fatal("no fidelity block — nothing tells the reader why the document stays empty")
 	}
-	if !strings.Contains(strings.ToLower(cells[0].Source), "codex") {
-		t.Errorf("the note does not name the CLI whose support is missing: %q", cells[0].Source)
+	if doc.Fidelity.Turns {
+		t.Error("a codex notebook claims its turns are projected")
+	}
+	if !doc.Fidelity.Send {
+		t.Error("a codex notebook claims it cannot be sent prompts — it can, every CLI has a terminal")
+	}
+	if doc.Fidelity.CLI != "codex" {
+		t.Errorf("cli = %q, want codex", doc.Fidelity.CLI)
 	}
 
-	// And it must not be repeated on every reopen.
-	st2, err := openSessionNotebook("agent-degraded", "codex", t.TempDir(), Capabilities{TranscriptContent: false})
+	// Reopening recomputes rather than replaying, so nothing about
+	// capabilities accumulates in the log.
+	before := doc.Version
+	st2, err := openSessionNotebook("agent-degraded", "codex", t.TempDir(), adapters["codex"].Capabilities())
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if n := len(st2.Doc().Cells); n != len(cells) {
-		t.Errorf("reopening added %d cells — the note is being appended every time", n-len(cells))
+	if after := st2.Doc().Version; after != before {
+		t.Errorf("reopening appended %d events", after-before)
 	}
 }
 

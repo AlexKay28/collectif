@@ -375,11 +375,18 @@ func (d *deltaWriter) text() string {
 // back through the transcript and settles it. That asymmetry is the honest
 // one — we are not the agent, we are the surface.
 func sendPromptCell(st *notebookStore, cellID, source, sessionID string, run *nbRun) {
-	// Tell the projector this turn already has a cell, before sending: the
-	// transcript can be read back within milliseconds, and registering
-	// afterwards would lose the race and duplicate the prompt.
-	if p := sessionProjectorFor(sessionID); p != nil {
-		p.AwaitAdoption(cellID, source)
+	// Adoption only means anything on a CLI whose turns come back to us.
+	// On one we cannot project, nothing is ever echoed, so waiting to be
+	// adopted would mean every delivered prompt eventually reporting "this
+	// may not have arrived" — D11's error pointed the other way (#47 P2).
+	projects := st.Doc().Fidelity != nil && st.Doc().Fidelity.Turns
+	if projects {
+		// Registered before sending: the transcript can be read back
+		// within milliseconds, and registering afterwards would lose the
+		// race and duplicate the prompt.
+		if p := sessionProjectorFor(sessionID); p != nil {
+			p.AwaitAdoption(cellID, source)
+		}
 	}
 	if err := sendToSession(sessionID, source); err != nil {
 		st.Append(evOutputAppended, outputAppendedPayload{ //nolint:errcheck
@@ -389,6 +396,27 @@ func sendPromptCell(st *notebookStore, cellID, source, sessionID string, run *nb
 		st.finishRunWithUsage(cellID, run.runID, CellError, Usage{})
 		return
 	}
+	if !projects {
+		// Delivered, and that is all we will ever know. Settling it as ok
+		// with a note is the honest end: the prompt reached the agent, the
+		// answer is somewhere we cannot see, and an empty cell left running
+		// would read as an agent ignoring you.
+		cli := st.Doc().Meta.CLI
+		if cli == "" {
+			cli = "this CLI"
+		}
+		st.Append(evOutputAppended, outputAppendedPayload{ //nolint:errcheck
+			CellID: cellID, RunID: run.runID,
+			Output: Output{
+				Type: OutputText,
+				Text: "Sent. collectif cannot read " + cli + "'s transcript, so the reply will not " +
+					"appear here — watch the terminal for it.",
+			},
+		})
+		st.finishRunWithUsage(cellID, run.runID, CellOK, Usage{})
+		return
+	}
+
 	// No terminal event here on purpose. The turn is the CLI's now, and it
 	// ends when the transcript says it ends.
 	st.endRun(cellID, run.runID)

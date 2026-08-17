@@ -226,7 +226,7 @@ now about what a projected session can do, not about growing a competing agent.
 | M2, M2.5 | done | **unchanged, re-scoped** as the detached-notebook backend (D10) |
 | **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
 | **P1 — Input + provenance** | — | **Done.** A: prompt cells write to the PTY and the projector adopts them back. B: the agent's questions arrive through the Notification hook and render as inline widgets, answerable in place; the ask and the verdict are two append-only records paired by id. Verified live — the agent asked permission, it was approved from the notebook, and the command ran. |
-| **P2 — Degradation** | — | **NEW.** Per-adapter capability surfacing (D11); codex and opencode render honestly. Exit: three CLIs, three fidelities, no lies. |
+| **P2 — Degradation** | — | **Done.** Fidelity is modelled per *surface* (turns / approvals / send / usage), not as one boolean, and derived on every read rather than stored. codex reads as `turns: false, approvals: true, send: true` — a real and useful answer that a single flag could not express. No projectors were written for codex or opencode: neither is installed here and there are no rollout files, and inventing a parser from documentation is the mistake P0 exists to have caught. |
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
 | M5 MCP (#54) | core | unchanged |
@@ -277,6 +277,38 @@ id. What it records is the *decision*, not the agent's receipt of it — a
 terminal acknowledges nothing — and an unanswered prompt that the sweeper
 clears is recorded as `expired`, never as an approval. This is the audit trail
 ADR 0001 §4.6 wanted and the scrollback could not give.
+
+### Degradation cuts both ways
+
+D11 is about not claiming fidelity we lack. P2 found the same error pointed
+the other way. On a CLI whose turns are not projected, nothing is ever echoed
+back, so P1's adoption timeout fired on *every* prompt and reported "this may
+not have arrived" about prompts that arrived fine. A send on such a CLI now
+settles immediately as delivered, with a line saying the reply will appear in
+the terminal rather than here.
+
+The capability statement itself moved out of the log. P0 wrote a one-time
+markdown cell explaining the gap; that put a claim about the *build*
+permanently into a *document*, where it would still assert "codex turns are not
+shown" long after someone wrote the parser. It is now derived on every read and
+stored nowhere.
+
+### The snapshot was not disposable after all
+
+§4.3 calls the `.snap.json` "derived and disposable". `load()` disagreed: it
+trusted any snapshot whose version was `<= len(events)` and replayed the log's
+tail onto it, without ever checking that the snapshot summarised *this* log's
+prefix. Two collectif processes on one notebook directory, a restored backup,
+or a rewritten log all produce a snapshot of a different history that happens
+to reach a plausible length — and the document served afterwards is silently
+wrong.
+
+Found by regenerating a replay notebook while a server still held it open: the
+served document reported no session while its own log recorded one, so the
+fidelity block vanished from a notebook that should have had it. Snapshots now
+carry the id of the last event they folded, and one that cannot be matched
+against the log is discarded rather than believed. Re-folding a log is cheap;
+serving a wrong document is not.
 
 ### One more thing collectif was doing to itself
 

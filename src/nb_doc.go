@@ -126,6 +126,12 @@ type NotebookMeta struct {
 	Effort    string  `json:"effort,omitempty"`
 	BudgetUSD float64 `json:"budgetUsd,omitempty"`
 
+	// CLI is the adapter that spawned the mirrored session. Recorded so a
+	// notebook whose session has long ended can still say what it was able
+	// to record — the *capabilities* are looked up live, but which CLI it
+	// was is a fact about this document.
+	CLI string `json:"cli,omitempty"`
+
 	// SessionID names the CLI session this notebook mirrors (ADR 0002).
 	// Empty means detached: the notebook is its own document and prompt
 	// cells run on collectif's provider (D10). Non-empty means the agent
@@ -140,6 +146,12 @@ type Notebook struct {
 	Root  string       `json:"root"` // working directory; execution is contained here
 	Meta  NotebookMeta `json:"meta"`
 	Cells []Cell       `json:"cells"`
+	// Fidelity is what this notebook can actually show, derived on every
+	// read from the adapter registry (#47 P2). Never folded, never
+	// written: what a build can do is a property of the code, not of the
+	// document, and a claim frozen into a log goes stale silently.
+	Fidelity *NotebookFidelity `json:"fidelity,omitempty"`
+
 	// Version is the number of events folded in, including ones this build
 	// did not understand. It is the log's position, not a schema version.
 	Version int `json:"version"`

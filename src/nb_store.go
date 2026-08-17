@@ -41,6 +41,24 @@ const nbSnapshotEvery = 200
 type notebookSnapshot struct {
 	Version  int       `json:"version"`
 	Notebook *Notebook `json:"notebook"`
+
+	// LastEventID is the id of the last event folded into this snapshot.
+	// It is what makes the cache verifiable: a snapshot is only usable if
+	// the log's event at Version-1 is that same event, which proves the
+	// snapshot summarises *this* history rather than some other one that
+	// happened to reach the same length.
+	//
+	// Without it, load() replayed the log's tail onto whatever base the
+	// snapshot happened to hold. Two collectif processes sharing a notebook
+	// directory, a restored backup, or a rewritten log all produce a
+	// snapshot of a different history — and the document served afterwards
+	// is silently wrong. A real notebook lost its entire Meta block this
+	// way and reported no session while its log plainly recorded one.
+	//
+	// Empty means a snapshot written before this field existed. Those are
+	// treated as unverifiable and discarded: re-folding a log is cheap and
+	// serving a wrong document is not.
+	LastEventID string `json:"lastEventId,omitempty"`
 }
 
 // notebookStore owns one notebook's log and its in-memory fold.
@@ -56,7 +74,11 @@ type notebookStore struct {
 	nb            *Notebook
 	log           *os.File
 	sinceSnapshot int
-	closed        bool
+	// lastEventID is the id of the most recently folded event, stamped into
+	// each snapshot so a later load can prove the snapshot belongs to this
+	// log rather than to some other history of the same length.
+	lastEventID string
+	closed      bool
 
 	// subMu guards subs ONLY, and is never held while mu is held (or vice
 	// versa) — the two are strictly independent, as in session.go.
@@ -145,7 +167,10 @@ func (st *notebookStore) load() (*Notebook, error) {
 		return nil, err
 	}
 
-	if snap, ok := st.readSnapshot(); ok && snap.Version <= len(events) {
+	if n := len(events); n > 0 {
+		st.lastEventID = events[n-1].ID
+	}
+	if snap, ok := st.readSnapshot(); ok && snapshotMatchesLog(snap, events) {
 		nb := snap.Notebook
 		for _, e := range events[snap.Version:] {
 			if err := applyEvent(nb, e); err != nil {
@@ -157,6 +182,27 @@ func (st *notebookStore) load() (*Notebook, error) {
 		return nb, nil
 	}
 	return foldEvents(events)
+}
+
+// snapshotMatchesLog reports whether a snapshot can be trusted as the fold
+// of this log's first Version events.
+//
+// The length check alone is not enough, and believing it is the bug this
+// function exists to close: two histories can reach the same length while
+// containing entirely different events. Comparing the last folded event's
+// id makes divergence detectable — the ids are UUIDs, so two histories
+// would have to collide on one at the same index.
+func snapshotMatchesLog(snap notebookSnapshot, events []Event) bool {
+	if snap.Notebook == nil || snap.Version < 0 || snap.Version > len(events) {
+		return false
+	}
+	if snap.Version == 0 {
+		return true // nothing folded in; the base is empty either way
+	}
+	if snap.LastEventID == "" {
+		return false // predates the check, so unverifiable — re-fold instead
+	}
+	return events[snap.Version-1].ID == snap.LastEventID
 }
 
 // readLog parses every line. A trailing partial line (a crash mid-write) is
@@ -249,6 +295,7 @@ func (st *notebookStore) Append(typ string, payload any) (Event, error) {
 		return Event{}, fmt.Errorf("append to notebook log: %w", err)
 	}
 	st.nb = next
+	st.lastEventID = e.ID
 
 	// The position this event was applied at — see broadcastEvent.
 	seq := st.nb.Version
@@ -268,8 +315,12 @@ func (st *notebookStore) Append(typ string, payload any) (Event, error) {
 // Doc returns a copy the caller can read while the store keeps folding.
 func (st *notebookStore) Doc() *Notebook {
 	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.nb.clone()
+	doc := st.nb.clone()
+	st.mu.Unlock()
+	// Derived, not folded (#47 P2). Filled here because this is the single
+	// read path, so no caller can accidentally serve a document without it.
+	doc.Fidelity = fidelityFor(doc)
+	return doc
 }
 
 // Close flushes a final snapshot and releases the log handle.
@@ -290,7 +341,11 @@ func (st *notebookStore) Close() error {
 // purpose: the snapshot is disposable, and refusing to continue because a
 // cache write failed would take the notebook down with it.
 func (st *notebookStore) writeSnapshotLocked() {
-	b, err := json.Marshal(notebookSnapshot{Version: st.nb.Version, Notebook: st.nb})
+	b, err := json.Marshal(notebookSnapshot{
+		Version:     st.nb.Version,
+		Notebook:    st.nb,
+		LastEventID: st.lastEventID,
+	})
 	if err != nil {
 		return
 	}
