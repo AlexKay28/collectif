@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -195,4 +196,120 @@ type unpricedProvider struct{ fakeProvider }
 
 func (p *unpricedProvider) Models() []ModelInfo {
 	return []ModelInfo{{ID: "local-model", ContextWindow: 100_000}}
+}
+
+// M1 made a mid-run refresh work by keeping each running cell's output on
+// the store and handing it to a joining client in the fold. The agent loop
+// broadcasts deltas directly instead of going through that writer, so a
+// prompt cell gets the streaming but not the buffer — refresh during a long
+// model turn and the cell is empty again. Same guarantee, two run paths,
+// only one of them honouring it.
+func TestConformance_PromptCellLiveOutputSurvivesAReconnect(t *testing.T) {
+	f := newNBFixture(t)
+	// A provider that streams and then keeps running, so the cell is
+	// genuinely mid-turn when the buffer is inspected. An instant fake
+	// would let this pass without proving anything.
+	withProvider(t, &blockingProvider{emitted: make(chan struct{})})
+	cell := f.addCell(t, "prompt", "say something")
+	t.Cleanup(func() { nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/interrupt", nil) })
+
+	watch, closeWatch := f.dialWS(t)
+	defer closeWatch()
+
+	nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/run", nil)
+	f.readUntilDelta(t, watch, cell, "partial", 10*time.Second)
+
+	if got := f.stateOf(cell); got != CellRunning {
+		t.Fatalf("cell state = %q, want it still running for this to prove anything", got)
+	}
+	live := f.st.liveSnapshot()
+	if _, ok := live[cell]; !ok {
+		t.Fatal("a running prompt cell kept no live buffer — a refresh mid-turn would show an empty cell")
+	}
+	if !strings.Contains(live[cell].Text, "partial") {
+		t.Errorf("live buffer = %q, want the streamed text", live[cell].Text)
+	}
+}
+
+// ADR §4.4: "a cancelled run finalises whatever it has". Shell cells keep
+// what they produced before the kill; prompt cells must too.
+func TestConformance_InterruptedPromptCellKeepsWhatItProduced(t *testing.T) {
+	f := newNBFixture(t)
+	withProvider(t, &blockingProvider{emitted: make(chan struct{})})
+	cell := f.addCell(t, "prompt", "start something long")
+
+	nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/run", nil)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for f.stateOf(cell) != CellRunning && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Wait until the provider has actually streamed something.
+	select {
+	case <-f.st.liveWait(cell, 5*time.Second):
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider never streamed anything")
+	}
+
+	nbRequest(t, f.srv, http.MethodPost, f.base+"/cells/"+cell+"/interrupt", nil)
+	c := f.waitForState(t, cell, 10*time.Second)
+
+	if c.State != CellInterrupted {
+		t.Fatalf("State = %q, want %q", c.State, CellInterrupted)
+	}
+	if got := f.outputText(c); !strings.Contains(got, "partial") {
+		t.Errorf("outputs = %q, want the text produced before the interrupt to be kept", got)
+	}
+}
+
+// blockingProvider streams a little and then blocks until the context is
+// cancelled, so an interrupt can be delivered mid-turn deterministically.
+type blockingProvider struct {
+	fakeProvider
+	emitted chan struct{}
+}
+
+func (p *blockingProvider) Stream(ctx context.Context, req Request) (Stream, error) {
+	return &blockingStream{ctx: ctx, emitted: p.emitted}, nil
+}
+
+type blockingStream struct {
+	ctx     context.Context
+	emitted chan struct{}
+	sent    bool
+}
+
+func (s *blockingStream) Next() (Chunk, error) {
+	if !s.sent {
+		s.sent = true
+		select {
+		case <-s.emitted:
+		default:
+			close(s.emitted)
+		}
+		return Chunk{Type: ChunkText, Text: "partial answer before the interrupt"}, nil
+	}
+	<-s.ctx.Done() // block until interrupted
+	return Chunk{}, s.ctx.Err()
+}
+
+func (s *blockingStream) Result() Result {
+	return Result{StopReason: StopEndTurn}
+}
+func (s *blockingStream) Close() error { return nil }
+
+// liveWait signals once the cell has any live output buffered.
+func (st *notebookStore) liveWait(cellID string, timeout time.Duration) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			if snap := st.liveSnapshot(); snap[cellID].Text != "" {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	return ch
 }

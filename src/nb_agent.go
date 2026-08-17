@@ -191,6 +191,15 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 	if run.wasInterrupted() {
 		status = CellInterrupted
 	}
+	if status == CellInterrupted {
+		// ADR §4.4: a cancelled run finalises whatever it has. The turn
+		// never completed, so nothing was recorded from its blocks — the
+		// streamed text is all there is, and discarding it would throw
+		// away the part the user was actually reading.
+		if partial := st.liveText(cellID, run.runID); strings.TrimSpace(partial) != "" {
+			st.emitOutput(cellID, run.runID, Output{Type: OutputText, Text: partial})
+		}
+	}
 	st.finishRunWithUsage(cellID, run.runID, status, total)
 }
 
@@ -203,6 +212,14 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 	}
 	defer stream.Close()
 
+	// Write through the same accumulator shell cells use, rather than
+	// broadcasting straight to subscribers. Broadcasting alone streams to
+	// whoever is already watching and leaves nothing for a client that
+	// joins mid-turn — so a refresh during a long model turn showed an
+	// empty cell, the exact failure M1 fixed for shell cells and this path
+	// quietly did not inherit.
+	out := &deltaWriter{st: st, cellID: cellID, runID: run.runID}
+
 	for {
 		chunk, err := stream.Next()
 		if errors.Is(err, io.EOF) {
@@ -214,11 +231,11 @@ func streamTurn(ctx context.Context, st *notebookStore, cellID string, run *nbRu
 		switch chunk.Type {
 		case ChunkText, ChunkThinking:
 			if chunk.Text != "" {
-				st.broadcastDelta(cellID, run.runID, chunk.Text)
+				out.write(chunk.Text)
 			}
 		case ChunkToolUse:
 			if chunk.ToolCall != nil {
-				st.broadcastDelta(cellID, run.runID, "\n→ "+chunk.ToolCall.Name+"\n")
+				out.write("\n→ " + chunk.ToolCall.Name + "\n")
 			}
 		}
 	}
