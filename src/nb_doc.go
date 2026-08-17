@@ -98,6 +98,10 @@ type Cell struct {
 	RunID    string        `json:"runId,omitempty"`
 	Started  time.Time     `json:"started,omitempty"`
 	Duration time.Duration `json:"duration,omitempty"`
+	// Usage is what this cell's last run actually cost, reported by the
+	// provider rather than inferred from a transcript (#50). Zero for cell
+	// types that don't call a model.
+	Usage Usage `json:"usage,omitempty"`
 }
 
 type NotebookMeta struct {
@@ -202,6 +206,9 @@ type runFinishedPayload struct {
 	CellID string    `json:"cellId"`
 	RunID  string    `json:"runId"`
 	Status CellState `json:"status"`
+	// Usage is carried on the terminal event so a cell's cost is part of
+	// the log rather than a number only the live process knew (#50).
+	Usage Usage `json:"usage,omitempty"`
 }
 
 type cellsInvalidatedPayload struct {
@@ -337,6 +344,7 @@ func applyEvent(nb *Notebook, e Event) error {
 		nb.Cells[i].State = CellRunning
 		nb.Cells[i].Started = e.At
 		nb.Cells[i].Duration = 0
+		nb.Cells[i].Usage = Usage{}
 
 	case evOutputAppended:
 		var p outputAppendedPayload
@@ -371,6 +379,7 @@ func applyEvent(nb *Notebook, e Event) error {
 			st = CellOK
 		}
 		nb.Cells[i].State = st
+		nb.Cells[i].Usage = p.Usage
 		// Duration comes from the envelope timestamps rather than being
 		// reported by the writer, so it stays consistent with the log.
 		if !nb.Cells[i].Started.IsZero() && !e.At.IsZero() {

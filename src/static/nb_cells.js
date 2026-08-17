@@ -73,7 +73,8 @@ function renderCell(cell) {
       ? `<div class="nb-md">${renderMarkdown(cell.source) || '<p class="nb-hint">Empty markdown cell — press Enter to edit.</p>'}</div>`
       : `<pre class="nb-src-view">${escapeHTML(cell.source || "") || '<span class="nb-hint">Empty — press Enter to edit.</span>'}</pre>`;
 
-  const runnable = cell.type === "shell";
+  // #50: prompt cells run through the agent loop now.
+  const runnable = cell.type === "shell" || cell.type === "prompt";
   const running = cell.state === "running";
 
   return `
@@ -103,13 +104,30 @@ function stateChip(cell) {
   if (s === "idle") return "";
   const label = {
     running: "running",
-    ok: cell.duration ? fmtDuration(cell.duration) : "ok",
+    ok: okLabel(cell),
     error: "error",
     interrupted: "interrupted",
     stale: "stale",
     queued: "queued",
   }[s] || s;
   return `<span class="nb-chip chip-${escapeHTML(s)}">${escapeHTML(label)}</span>`;
+}
+
+// okLabel shows what the run cost as well as how long it took. Tokens come
+// from the provider's own report (#50), not from a scraped transcript.
+function okLabel(cell) {
+  const parts = [];
+  if (cell.duration) parts.push(fmtDuration(cell.duration));
+  const u = cell.usage || {};
+  const inTok = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheCreationTokens || 0);
+  if (inTok || u.outputTokens) parts.push(`${fmtTokens(inTok)}→${fmtTokens(u.outputTokens || 0)}`);
+  return parts.length ? parts.join(" · ") : "ok";
+}
+
+function fmtTokens(n) {
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1e6).toFixed(1)}M`;
 }
 
 // Go marshals time.Duration as an integer count of nanoseconds.

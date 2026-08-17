@@ -75,9 +75,18 @@ func handleCellRun(w http.ResponseWriter, r *http.Request, st *notebookStore, ce
 	case CellMarkdown:
 		http.Error(w, "markdown cells are not executed", http.StatusBadRequest)
 		return
-	case CellPrompt, CellFile:
-		http.Error(w, string(cell.Type)+" cells run once the agent loop lands (M2)", http.StatusNotImplemented)
+	case CellFile:
+		// A file cell is context, not an action — it contributes its
+		// contents to every projection and has nothing of its own to run.
+		http.Error(w, "file cells are read during projection, not run", http.StatusBadRequest)
 		return
+	case CellPrompt:
+		if activeProvider == nil {
+			http.Error(w,
+				"no model provider is configured — set one up before running prompt cells",
+				http.StatusServiceUnavailable)
+			return
+		}
 	case CellShell:
 		// fall through
 	default:
@@ -99,7 +108,11 @@ func handleCellRun(w http.ResponseWriter, r *http.Request, st *notebookStore, ce
 	// Execution is asynchronous: the call starts a run, it does not wait
 	// for one. A cell that takes ten minutes must not hold an HTTP request
 	// open for ten minutes.
-	go runShellCell(ctx, st, cellID, cell.Source, doc.Root, run)
+	if cell.Type == CellPrompt {
+		go runPromptCell(ctx, st, cellID, run, activeProvider)
+	} else {
+		go runShellCell(ctx, st, cellID, cell.Source, doc.Root, run)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"cellId": cellID, "runId": run.runID})
 }
@@ -241,6 +254,12 @@ func killProcessGroup(cmd *exec.Cmd) {
 // finishRun writes the two events that make a run durable: one finalised
 // output, then the terminal state. Deltas were live-only; this is the
 // record.
+// logNotebookErr keeps the log-append failure message identical wherever a
+// run reports one.
+func logNotebookErr(st *notebookStore, cellID, what string, err error) {
+	log.Printf("notebook %s: %s for cell %s: %v", st.slug, what, cellID, err)
+}
+
 func (st *notebookStore) finishRun(cellID, runID, text string, status CellState) {
 	if text != "" {
 		if _, err := st.Append(evOutputAppended, outputAppendedPayload{
