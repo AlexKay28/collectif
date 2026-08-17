@@ -81,11 +81,28 @@ func handleCellRun(w http.ResponseWriter, r *http.Request, st *notebookStore, ce
 		http.Error(w, "file cells are read during projection, not run", http.StatusBadRequest)
 		return
 	case CellPrompt:
-		if activeProvider == nil {
+		// ADR 0002 D10: two backends, one verb. A notebook that mirrors a
+		// CLI session sends its prompts to that CLI; a detached notebook
+		// runs them on our own provider. The provider check applies only
+		// to the second — a session notebook on a machine with no API key
+		// is perfectly usable, because the agent is the CLI.
+		if doc.Meta.SessionID == "" && activeProvider == nil {
 			http.Error(w,
 				"no model provider is configured — set one up before running prompt cells",
 				http.StatusServiceUnavailable)
 			return
+		}
+		if doc.Meta.SessionID != "" {
+			// Checked before a run is begun so a dead session is a clean
+			// 503 rather than a cell that starts and never finishes.
+			if err := checkSessionDrivable(doc.Meta.SessionID); err != nil {
+				code := http.StatusServiceUnavailable
+				if errors.Is(err, errAgentWaiting) {
+					code = http.StatusConflict
+				}
+				http.Error(w, err.Error(), code)
+				return
+			}
 		}
 	case CellShell:
 		// fall through
@@ -115,9 +132,12 @@ func handleCellRun(w http.ResponseWriter, r *http.Request, st *notebookStore, ce
 	// Execution is asynchronous: the call starts a run, it does not wait
 	// for one. A cell that takes ten minutes must not hold an HTTP request
 	// open for ten minutes.
-	if cell.Type == CellPrompt {
+	switch {
+	case cell.Type == CellPrompt && doc.Meta.SessionID != "":
+		go sendPromptCell(st, cellID, cell.Source, doc.Meta.SessionID, run)
+	case cell.Type == CellPrompt:
 		go runPromptCell(ctx, st, cellID, run, activeProvider)
-	} else {
+	default:
 		go runShellCell(ctx, st, cellID, cell.Source, doc.Root, run)
 	}
 
@@ -129,6 +149,31 @@ func handleCellInterrupt(w http.ResponseWriter, r *http.Request, st *notebookSto
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	doc := st.Doc()
+	i := indexOfCell(doc, cellID)
+
+	// A mirrored turn has no local run to cancel — the work is happening
+	// inside the CLI, and the run entry here is only a placeholder that the
+	// send path releases. So the session is checked *first*: cancelling the
+	// placeholder would report success and stop nothing, which is worse
+	// than a button that does not exist.
+	//
+	// Stopping the agent is Escape. The transcript then reports the
+	// interruption and the projector settles the cell — we do not settle it
+	// ourselves, because we do not know whether the agent obeyed.
+	if i >= 0 && doc.Meta.SessionID != "" && doc.Cells[i].Type == CellPrompt {
+		if doc.Cells[i].State != CellRunning {
+			http.Error(w, "cell is not running", http.StatusConflict)
+			return
+		}
+		if err := interruptSession(doc.Meta.SessionID); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"cellId": cellID, "sessionInterrupted": true})
+		return
+	}
+
 	st.runsMu.Lock()
 	run, ok := st.runs[cellID]
 	st.runsMu.Unlock()
@@ -322,4 +367,29 @@ func (d *deltaWriter) write(s string) {
 
 func (d *deltaWriter) text() string {
 	return d.st.liveText(d.cellID, d.runID)
+}
+
+// sendPromptCell hands a prompt to the CLI that owns this notebook's
+// session (#47 P1). It is deliberately not a "run": nothing is executed
+// here, and the cell stays running until the projector sees the turn come
+// back through the transcript and settles it. That asymmetry is the honest
+// one — we are not the agent, we are the surface.
+func sendPromptCell(st *notebookStore, cellID, source, sessionID string, run *nbRun) {
+	// Tell the projector this turn already has a cell, before sending: the
+	// transcript can be read back within milliseconds, and registering
+	// afterwards would lose the race and duplicate the prompt.
+	if p := sessionProjectorFor(sessionID); p != nil {
+		p.AwaitAdoption(cellID, source)
+	}
+	if err := sendToSession(sessionID, source); err != nil {
+		st.Append(evOutputAppended, outputAppendedPayload{ //nolint:errcheck
+			CellID: cellID, RunID: run.runID,
+			Output: Output{Type: OutputError, Text: err.Error()},
+		})
+		st.finishRunWithUsage(cellID, run.runID, CellError, Usage{})
+		return
+	}
+	// No terminal event here on purpose. The turn is the CLI's now, and it
+	// ends when the transcript says it ends.
+	st.endRun(cellID, run.runID)
 }

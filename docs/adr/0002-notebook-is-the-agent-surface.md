@@ -225,7 +225,7 @@ now about what a projected session can do, not about growing a competing agent.
 | M0, M1 | done | **unchanged** — the foundation was right |
 | M2, M2.5 | done | **unchanged, re-scoped** as the detached-notebook backend (D10) |
 | **P0 — Projection spike** | — | **NEW, done.** A: `TranscriptPart` + `ProjectTranscriptLine`. B: `sessionProjector` folds parts into cells — a prompt is a cell, the agent's work is its output. C: sessions open their own notebook, the sidebar links to it, mirrored cells render read-only with re-ask. Verified by replaying a real 2 893-line session into a document with correct states throughout. |
-| **P1 — Input + provenance** | — | **NEXT.** Authored prompt cells write to the PTY; approvals render as inline widgets from hooks. Most of D9's read-only half landed in P0; what remains is the write path. |
+| **P1 — Input + provenance** | — | **Slice A done.** Prompt cells write to the PTY and the projector adopts them back, so the cell you typed becomes the cell that ran. Slice B — approvals as inline widgets — is next, and is now also load-bearing for *sending* (see below). |
 | **P2 — Degradation** | — | **NEW.** Per-adapter capability surfacing (D11); codex and opencode render honestly. Exit: three CLIs, three fidelities, no lies. |
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; lower priority |
@@ -237,6 +237,42 @@ P0 before P1 because a read-only projection is falsifiable in an afternoon and
 answers the only question that can kill this: whether the transcript carries
 enough to reconstruct a turn. If it does not, we learn it before building an
 input path into a view that cannot show results.
+
+---
+
+### Sending is harder than reading
+
+Found by driving a real session, and it changes what slice B is for.
+
+A CLI is not always at a prompt. It puts up modal dialogs — trust-this-folder,
+set-up-auto-mode, every permission request — and while one is up, whatever is
+written to the PTY answers *the dialog*. A prompt beginning with "1" would
+select option 1 of a permission request. Sending blind is the wrong default
+even though it usually works.
+
+There is no reliable way to know a CLI's modal state from outside. `menu.go`'s
+ANSI scraping catches some (`Session.Pending`, now a hard gate on sending) and
+missed the auto-mode dialog that swallowed two live prompts during this phase.
+So the design does not pretend otherwise:
+
+- **Gate on what we can detect.** A send while a prompt is pending is refused
+  with 409 and an explanation, not queued.
+- **Make the residue loud.** A prompt that is not mirrored back within 20s
+  settles its cell as an error saying it may never have arrived and pointing at
+  the terminal. Before this the cell sat at "running" forever, which is
+  indistinguishable from an agent thinking hard.
+
+This promotes slice B from a rendering feature to a correctness one: until
+dialogs are surfaced as widgets, they are invisible obstacles that eat input.
+
+### One more thing collectif was doing to itself
+
+`cmd.Env = append(os.Environ(), …)` passed collectif's whole environment to
+every CLI it spawned. Launched from inside a Claude Code session — which is how
+it is developed — the child inherited `CLAUDE_CODE_CHILD_SESSION` and turned
+its own transcript off. Before ADR 0002 that cost telemetry. Now it costs the
+entire notebook: no transcript, no projection, no document, and nothing
+anywhere saying why. Every adapter now scrubs the parent's session identity.
 
 ---
 

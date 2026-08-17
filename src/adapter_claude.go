@@ -70,7 +70,7 @@ func (a *claudeAdapter) Spawn(req SpawnRequest) (*exec.Cmd, func(), error) {
 	}
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = req.Cwd
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(inheritableEnv(),
 		"TERM=xterm-256color",
 		"AGENTCTL_AGENT_ID="+req.AgentID,
 	)
@@ -147,4 +147,47 @@ var claudeModels = []ModelInfo{
 // ModelContextLimit resolves a model id against the catalog above.
 func (a *claudeAdapter) ModelContextLimit(model string) int {
 	return contextWindowOr(claudeModels, model)
+}
+
+// parentSessionEnv names the variables Claude Code uses to recognise that
+// it is running *inside another Claude Code session*. They describe the
+// process that launched collectif, not the agent collectif is launching,
+// and passing them down does real damage: a child that sees
+// CLAUDE_CODE_CHILD_SESSION turns its own transcript off —
+//
+//	Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker
+//
+// — which since ADR 0002 costs the whole notebook, not just telemetry. The
+// session looks healthy and records nothing.
+//
+// Found by spawning a real session from a collectif that had itself been
+// started from a Claude Code terminal, which is how it gets developed and
+// therefore not a rare configuration.
+var parentSessionEnv = []string{
+	"CLAUDE_CODE_CHILD_SESSION",
+	"CLAUDE_CODE_SESSION_ID",
+	"CLAUDE_CODE_MESSAGING_SOCKET",
+	"CLAUDE_CODE_MESSAGING_TOKEN",
+	"CLAUDE_CODE_ENTRYPOINT",
+}
+
+// inheritableEnv is os.Environ() minus the parent's session identity.
+// Everything else is passed through untouched — PATH, HOME, credentials
+// and the user's own configuration are all things the agent needs.
+func inheritableEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		drop := false
+		for _, name := range parentSessionEnv {
+			if strings.HasPrefix(kv, name+"=") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

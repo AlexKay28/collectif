@@ -36,6 +36,11 @@
       <div id="nb-doc-head">
         <span class="title" id="doc-title"></span>
         <span class="root" id="doc-root"></span>
+        <span class="sp"></span>
+        <span class="live" id="doc-live" style="display:none">
+          <span class="dot"></span><span id="doc-live-text"></span>
+          <button id="doc-term" type="button" title="Open the raw terminal">terminal</button>
+        </span>
       </div>
       <main id="nb-cells"></main>
     </section>
@@ -276,10 +281,35 @@ document.getElementById("nb-new").addEventListener("click", async () => {
   }
 });
 
+// A mirrored notebook is a live thing: what you type goes to a process
+// that is running right now. Saying so in the header is the difference
+// between a document and a control surface, and the two want different
+// caution from the reader.
+const docLive = document.getElementById("doc-live");
+const docLiveText = document.getElementById("doc-live-text");
+
+document.getElementById("doc-term").addEventListener("click", () => {
+  const sid = state.notebook?.meta?.sessionId;
+  if (sid) window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${sid}`, "_blank");
+});
+
 onChange(() => {
   const nb = state.notebook;
   docTitle.textContent = nb?.title || "";
   docRoot.textContent = nb?.root ? shortPath(nb.root) : "";
+
+  const sid = nb?.meta?.sessionId || "";
+  docLive.style.display = sid ? "" : "none";
+  if (sid) {
+    const s = (state.sessions || []).find((a) => a.id === sid);
+    // A session that has ended leaves its notebook behind — the document
+    // outlives the process, which is the point. It stops being something
+    // you can type into, and it has to say so rather than accepting a
+    // prompt that goes nowhere.
+    docLive.classList.toggle("ended", !s);
+    docLiveText.textContent = s ? (s.status || "live") : "session ended — read only";
+  }
+
   renderSidebar();
   renderSessions();
 });

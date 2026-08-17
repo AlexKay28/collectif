@@ -29,7 +29,6 @@ package main
 // capability bit and fill in Spawn / ParseTranscriptLine — the seam is here.
 
 import (
-	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -66,8 +65,8 @@ func (a *opencodeAdapter) Version() (string, error) {
 //   - SubagentFiles:        false — no .opencode/agents/*.md convention.
 //   - PreCompact:           false — no equivalent event.
 //   - SessionIDPinning:     false — no documented `--session-id` equivalent
-//                                    that survives a restart, so we don't
-//                                    claim reconnect will work.
+//     that survives a restart, so we don't
+//     claim reconnect will work.
 //
 // Flip bits back on as OpenCode stabilises the corresponding surface.
 func (a *opencodeAdapter) Capabilities() Capabilities {
@@ -114,7 +113,7 @@ func (a *opencodeAdapter) Spawn(req SpawnRequest) (*exec.Cmd, func(), error) {
 	}
 	cmd := exec.Command("opencode", args...)
 	cmd.Dir = req.Cwd
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(inheritableEnv(),
 		"TERM=xterm-256color",
 		"AGENTCTL_AGENT_ID="+req.AgentID,
 		// Soft signal for a future OpenCode plugin; ignored today.

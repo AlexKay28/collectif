@@ -125,6 +125,13 @@ type NotebookMeta struct {
 	Model     string  `json:"model,omitempty"`
 	Effort    string  `json:"effort,omitempty"`
 	BudgetUSD float64 `json:"budgetUsd,omitempty"`
+
+	// SessionID names the CLI session this notebook mirrors (ADR 0002).
+	// Empty means detached: the notebook is its own document and prompt
+	// cells run on collectif's provider (D10). Non-empty means the agent
+	// is the CLI, and a prompt cell is sent to it rather than executed
+	// here — the one field that decides which of the two backends runs.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type Notebook struct {

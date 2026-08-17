@@ -47,13 +47,23 @@ function render() {
   const selStart = active?.selectionStart;
   const selEnd = active?.selectionEnd;
 
+  // In a mirrored notebook the prompt is the point — it is how you talk to
+  // the running agent — so it leads and says where it goes. In a detached
+  // one it is one of three equals.
+  const live = !!(nb.meta && nb.meta.sessionId);
   root.innerHTML =
     (nb.cells || []).map((c, i) => renderCell(c, i + 1)).join("") +
-    `<div class="nb-add-row">
-       <button data-add="markdown">+ Markdown</button>
-       <button data-add="shell">+ Shell</button>
-       <button data-add="prompt" title="Runs once the agent loop lands (M2)">+ Prompt</button>
-     </div>`;
+    (live
+      ? `<div class="nb-add-row live">
+           <button data-add="prompt" class="primary" title="Send this to the agent (⇧Enter)">+ Ask the agent</button>
+           <button data-add="markdown">+ Note</button>
+           <button data-add="shell">+ Shell</button>
+         </div>`
+      : `<div class="nb-add-row">
+           <button data-add="markdown">+ Markdown</button>
+           <button data-add="shell">+ Shell</button>
+           <button data-add="prompt">+ Prompt</button>
+         </div>`);
 
   if (focusedCell) {
     const ta = root.querySelector(`textarea[data-cell-id="${cssEscape(focusedCell)}"]`);

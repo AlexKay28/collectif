@@ -28,9 +28,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -67,7 +69,15 @@ type sessionProjector struct {
 	// pendingParent hands the parent link to openCell without widening its
 	// signature for the one caller that has one.
 	pendingParent string
-	closed        bool
+	// adoptCell/adoptText are the cell awaiting its own reflection: a
+	// prompt you authored here and sent to the CLI, which is about to come
+	// back to us through the transcript.
+	adoptCell string
+	adoptText string
+	// adoptGen invalidates a pending give-up timer when the cell it was
+	// watching is adopted or replaced.
+	adoptGen uint64
+	closed   bool
 }
 
 func newSessionProjector(st *notebookStore) *sessionProjector {
@@ -145,6 +155,12 @@ func (p *sessionProjector) apply(part TranscriptPart) bool {
 			end = CellInterrupted
 		}
 		p.settleCurrent(end)
+		// A prompt we sent ourselves already has a cell. Attaching to it
+		// rather than inserting is what keeps the document from showing
+		// everything you type twice.
+		if p.adopt(part) {
+			return true
+		}
 		p.pendingParent = part.ParentUUID
 		ok := p.openCell(CellPrompt, part.Text, ProvenanceMirrored, part.UUID, part.Model, CellRunning)
 		p.pendingParent = ""
@@ -335,6 +351,15 @@ func openSessionNotebook(sessionID, cli, cwd string, caps Capabilities) (*notebo
 	if err != nil {
 		return nil, err
 	}
+	// The link back to the session, and the switch that sends prompt cells
+	// to the CLI instead of to our own provider.
+	if st.Doc().Meta.SessionID != sessionID {
+		meta := st.Doc().Meta
+		meta.SessionID = sessionID
+		if _, err := st.Append(evMetaSet, metaSetPayload{Meta: &meta}); err != nil {
+			return nil, err
+		}
+	}
 
 	// ADR 0002 D11: an adapter that cannot project says so, in the
 	// document, once. An empty notebook is indistinguishable from an agent
@@ -405,3 +430,184 @@ func notebookSlugOf(st *notebookStore) string {
 	}
 	return st.slug
 }
+
+// ─── Driving the session ────────────────────────────────────────────────
+
+// sendToSession writes text to a session's PTY as if it had been typed.
+// #47 P1, per ADR 0002 D1'.
+//
+// This is the notebook's other half. P0 made a session readable; this is
+// what makes the document the place you work rather than a viewer beside
+// the place you work. The CLI has no API — the PTY is the API — so a
+// prompt cell is submitted the same way a person submits one, with a
+// carriage return. Without that return the text sits in the CLI's input
+// box and nothing happens, which looks exactly like a hung agent.
+func sendToSession(sessionID, text string) error {
+	s := getSession(sessionID)
+	if s == nil {
+		return fmt.Errorf("session %s is no longer running — its notebook is a record now, not a control surface", sessionID)
+	}
+	pt := s.pty()
+	if pt == nil {
+		return fmt.Errorf("session %s has no terminal attached yet", sessionID)
+	}
+	if _, err := pt.Write([]byte(text + "\r")); err != nil {
+		return fmt.Errorf("writing to session %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// interruptSession stops whatever the agent is doing. Escape is what a
+// person presses, and it is all the CLI offers.
+func interruptSession(sessionID string) error {
+	s := getSession(sessionID)
+	if s == nil {
+		return fmt.Errorf("session %s is no longer running", sessionID)
+	}
+	pt := s.pty()
+	if pt == nil {
+		return fmt.Errorf("session %s has no terminal attached", sessionID)
+	}
+	_, err := pt.Write([]byte("\x1b"))
+	return err
+}
+
+// AwaitAdoption tells the projector that the cell it is about to see
+// mirrored back already exists.
+//
+// Without it the document shows every prompt twice: once as the cell you
+// wrote and once as the cell the transcript reported. Matching on the text
+// is crude but it is the only link there is — the CLI does not echo an id
+// back, and it has no idea the prompt came from us rather than from a
+// keyboard.
+func (p *sessionProjector) AwaitAdoption(cellID, source string) {
+	p.AwaitAdoptionFor(cellID, source, adoptionTimeout)
+}
+
+// adoptionTimeout bounds how long a sent prompt may go unmirrored before
+// we admit it may never have arrived. Generous: the CLI writes the user
+// turn to its transcript almost immediately, but the watcher polls at
+// 500ms and a busy machine is slower than a quiet one.
+const adoptionTimeout = 20 * time.Second
+
+// AwaitAdoptionFor is AwaitAdoption with an explicit deadline.
+//
+// The deadline exists because the modal gate is best-effort. Detecting
+// that a CLI is showing a dialog is regex archaeology on ANSI bytes
+// (menu.go), and it does not catch every one — the "Set up auto mode"
+// dialog it missed is why this timeout was written. A prompt that lands in
+// a dialog instead of the input box leaves its cell running forever, which
+// looks exactly like an agent thinking hard. Saying "this may not have
+// arrived, go and look" is the honest end state.
+func (p *sessionProjector) AwaitAdoptionFor(cellID, source string, within time.Duration) {
+	p.mu.Lock()
+	p.adoptCell, p.adoptText = cellID, source
+	p.adoptGen++
+	gen := p.adoptGen
+	p.mu.Unlock()
+
+	time.AfterFunc(within, func() { p.giveUpOnAdoption(cellID, gen) })
+}
+
+// giveUpOnAdoption fires when a sent prompt was never mirrored back. The
+// generation check makes it a no-op if the cell was adopted, superseded,
+// or another prompt was sent in the meantime.
+func (p *sessionProjector) giveUpOnAdoption(cellID string, gen uint64) {
+	p.mu.Lock()
+	if p.closed || p.adoptGen != gen || p.adoptCell != cellID {
+		p.mu.Unlock()
+		return
+	}
+	p.adoptCell, p.adoptText = "", ""
+	p.mu.Unlock()
+
+	p.st.Append(evOutputAppended, outputAppendedPayload{ //nolint:errcheck
+		CellID: cellID,
+		Output: Output{
+			Type: OutputError,
+			Text: "The agent never echoed this prompt back, so it may not have reached it — " +
+				"a CLI showing a dialog swallows whatever is typed. Open the terminal to check.",
+		},
+	})
+	p.st.Append(evRunFinished, runFinishedPayload{ //nolint:errcheck
+		CellID: cellID, Status: CellError,
+	})
+}
+
+// adopt attaches an incoming mirrored prompt to the cell the user already
+// authored, returning whether it did. One shot: a later identical prompt
+// is a new turn, not a second chance.
+func (p *sessionProjector) adopt(part TranscriptPart) bool {
+	if p.adoptCell == "" {
+		return false
+	}
+	cellID, want := p.adoptCell, p.adoptText
+	p.adoptCell, p.adoptText = "", ""
+	p.adoptGen++ // any pending give-up timer for this cell is now stale
+
+	if strings.TrimSpace(part.Text) != strings.TrimSpace(want) {
+		// Not ours. The cell we sent is not going to be answered — the
+		// send failed, or you typed into the terminal instead — so settle
+		// it rather than leaving it spinning until the page is reloaded.
+		p.st.Append(evRunFinished, runFinishedPayload{ //nolint:errcheck
+			CellID: cellID, Status: CellInterrupted,
+		})
+		return false
+	}
+
+	// Upgrade in place: it is a mirrored cell now, because the CLI owns the
+	// turn from here on and the read-only rules have to apply to it.
+	meta := CellMeta{
+		Provenance: ProvenanceMirrored,
+		SourceUUID: part.UUID,
+		ParentUUID: part.ParentUUID,
+		Model:      part.Model,
+	}
+	if _, err := p.st.Append(evCellEdited, cellEditedPayload{CellID: cellID, Meta: &meta}); err != nil {
+		return false
+	}
+	p.current, p.currentParent = cellID, part.ParentUUID
+	return true
+}
+
+// sessionProjectorFor finds the projector driving a session's notebook, or
+// nil if the session has none — no transcript yet, or an adapter that
+// cannot project.
+func sessionProjectorFor(sessionID string) *sessionProjector {
+	s := getSession(sessionID)
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.projector
+}
+
+// checkSessionDrivable reports whether a prompt could be sent right now.
+// Separate from sendToSession so the HTTP layer can refuse before a run is
+// begun: a cell that starts and never finishes is worse than a 503.
+func checkSessionDrivable(sessionID string) error {
+	s := getSession(sessionID)
+	if s == nil {
+		return fmt.Errorf("session %s is no longer running — this notebook is a record of it, not a control surface", sessionID)
+	}
+	if s.pty() == nil {
+		return fmt.Errorf("session %s has no terminal attached yet", sessionID)
+	}
+	if s.hasPending() {
+		// A CLI showing a dialog reads whatever arrives as an answer to it.
+		// Sending a prompt now is not merely useless — a prompt beginning
+		// with "1" would select the first option of a permission request.
+		// This gate is only as good as menu.go's detection, which is why
+		// the send also has a delivery timeout.
+		return errAgentWaiting
+	}
+	return nil
+}
+
+// errAgentWaiting is a distinct error because the HTTP layer answers it
+// with 409 rather than 503: nothing is broken, the agent is just mid-
+// question and the answer has to be given deliberately.
+var errAgentWaiting = errors.New(
+	"the agent is waiting on an answer — respond to it before sending a new prompt, " +
+		"or it will read the prompt as the answer")
