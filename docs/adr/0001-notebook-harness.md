@@ -1,10 +1,17 @@
 # ADR 0001 — collectif becomes a notebook-native agent harness
 
-- **Status**: Proposed
+- **Status**: Amended by [ADR 0002](0002-notebook-is-the-agent-surface.md)
 - **Date**: 2026-08-16
 - **Supersedes**: none
 - **Related**: #46 (multi-CLI adapters), #42 (harness telemetry), #41 (visual control), #29 (Session decomposition), #17/#16/#15 (multi-agent)
 - **API surface verified**: 2026-08-16, against the current Anthropic Messages API, the MCP transport spec, and the `anthropic-sdk-go` surface. Anything below marked *(beta)* is gated by a beta header and may move.
+
+> **Read 0002 first.** This ADR aimed the notebook at the wrong layer. Its D1
+> ("collectif runs its own agent loop") and D8 ("notebook is the product;
+> PTY/CLI mode goes legacy") are replaced by 0002: the notebook replaces the
+> **terminal**, not the CLI. Everything below about the document model,
+> context projection, the event log, and cache economics stands — the loop it
+> describes is now one of two backends rather than the only one.
 
 ---
 
@@ -83,14 +90,14 @@ notebook stops being a rendering trick and becomes the actual data model.
 
 | # | Decision | Rejected alternative |
 |---|---|---|
-| D1 | collectif runs its own agent loop in Go | Keep mirroring CLIs; keep the fidelity ceiling |
+| D1 | ~~collectif runs its own agent loop in Go~~ — **narrowed by 0002 D10**: the loop is retained, but as the backend for notebooks with no CLI session attached | Keep mirroring CLIs; keep the fidelity ceiling |
 | D2 | Provider-agnostic (Anthropic Messages via `anthropic-sdk-go` + an OpenAI-compatible transport) | Anthropic-only v1; reuse CLI auth via headless mode |
 | D3 | Mixed-cell authored document (markdown / prompt / shell / file) | Linear prompt+turn chat; strict Jupyter re-execution |
 | D4 | Server-authoritative, event-sourced notebook; thin browser client | Fat browser + stateless server; formal kernel protocol |
 | D5 | Small built-in tool set + MCP client | Built-ins only; tools-as-cells |
 | D6 | Policy rules with inline approval widgets; hard cwd containment | Trust-the-operator; OS sandboxing in v1 |
 | D7 | Subagents via a `task` tool, rendered as nested outputs | Fan-out compare cells; one-agent-per-notebook |
-| D8 | Notebook is the product; PTY/CLI mode goes legacy | Two coexisting paradigms; hard-reset new repo |
+| D8 | ~~Notebook is the product; PTY/CLI mode goes legacy~~ — **replaced by 0002 D8′**: the notebook is the default *view of a session*; the CLIs stay primary | Two coexisting paradigms; hard-reset new repo |
 
 D4's rationale in full, since it's load-bearing: the Go server owning an
 append-only event log per notebook means refresh and reconnect are a re-fold,

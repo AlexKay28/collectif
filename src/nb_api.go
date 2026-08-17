@@ -229,19 +229,26 @@ func handleCellEditOrDelete(w http.ResponseWriter, r *http.Request, st *notebook
 		var req struct {
 			Source *string   `json:"source"`
 			Meta   *CellMeta `json:"meta"`
+			Type   *CellType `json:"type"`
 		}
 		if !decodeBody(w, r, &req) {
 			return
 		}
-		if req.Source == nil && req.Meta == nil {
+		if req.Source == nil && req.Meta == nil && req.Type == nil {
 			http.Error(w, "nothing to update", http.StatusBadRequest)
+			return
+		}
+		// Same gate as insert: a type the fold cannot render must never
+		// reach the log, where it would be permanent.
+		if req.Type != nil && !validCellType(*req.Type) {
+			http.Error(w, "unknown cell type "+string(*req.Type), http.StatusBadRequest)
 			return
 		}
 		if !cellExists(st, cellID) {
 			http.Error(w, "cell not found", http.StatusNotFound)
 			return
 		}
-		if _, err := st.Append(evCellEdited, cellEditedPayload{CellID: cellID, Source: req.Source, Meta: req.Meta}); err != nil {
+		if _, err := st.Append(evCellEdited, cellEditedPayload{CellID: cellID, Source: req.Source, Meta: req.Meta, Type: req.Type}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -23,8 +23,23 @@ export const state = {
   selected: null, // cell id
   mode: "command", // "command" | "edit"
   live: new Map(), // cellId -> streaming text for the current run
+  // cellId -> a failure that belongs to that cell. Kept until the user
+  // acts, unlike the banner at the top of the page: a toast for a cell
+  // you are not looking at is how you press run and see nothing happen.
+  cellErrors: new Map(),
+  // Jupyter's command-mode verbs need somewhere to keep their state.
+  clipboard: null,        // a cut/copied cell, pasted with v / shift+v
+  trash: [],              // deleted cells, restored newest-first with z
+  hiddenOutputs: new Set(), // cells whose output is collapsed (o)
+  tallOutputs: new Set(),   // cells whose output scroll is unlocked (shift+o)
   ws: null,
   backoff: 1000,
+  // PTY sessions from the original dashboard. They are a different kind of
+  // thing to a notebook — a running process rather than a document — so
+  // they get their own list rather than being flattened together.
+  sessions: [],
+  dashWS: null,
+  dashBackoff: 1000,
 };
 
 const listeners = new Set();
@@ -59,12 +74,14 @@ export async function api(method, path, body) {
 
 export const nbAPI = {
   list: () => api("GET", "/api/nb"),
+  sessions: () => api("GET", "/api/agents"),
   create: (title, root) => api("POST", "/api/nb", { title, root }),
   get: (id) => api("GET", `/api/nb/${id}`),
   remove: (id) => api("DELETE", `/api/nb/${id}`),
   setMeta: (id, patch) => api("PATCH", `/api/nb/${id}`, patch),
   addCell: (id, cell) => api("POST", `/api/nb/${id}/cells`, cell),
   editCell: (id, cid, patch) => api("PATCH", `/api/nb/${id}/cells/${cid}`, patch),
+  setCellType: (id, cid, type) => api("PATCH", `/api/nb/${id}/cells/${cid}`, { type }),
   deleteCell: (id, cid) => api("DELETE", `/api/nb/${id}/cells/${cid}`),
   moveCell: (id, cid, beforeCellId) =>
     api("POST", `/api/nb/${id}/cells/${cid}/move`, { beforeCellId }),
@@ -253,5 +270,55 @@ function connect() {
       if (state.id) connect();
     }, state.backoff);
     state.backoff = Math.min(state.backoff * 2, 15000);
+  };
+}
+
+
+// ─── PTY sessions ─────────────────────────────────────────────────────
+
+// The dashboard's own stream, consumed read-only. The notebook never
+// drives a session — spawning, answering prompts and the terminal itself
+// all still live in the dashboard until M7 retires it. This is a view.
+export async function watchSessions() {
+  try {
+    state.sessions = (await nbAPI.sessions()) || [];
+    emit();
+  } catch {
+    // A dashboard that is unreachable should not stop the notebook
+    // working; the section simply stays empty.
+  }
+  connectDashboard();
+}
+
+function connectDashboard() {
+  if (state.dashWS) {
+    state.dashWS.onclose = null;
+    state.dashWS.close();
+  }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${proto}//${location.host}/ws/dashboard?token=${encodeURIComponent(TOKEN)}`);
+  state.dashWS = ws;
+
+  ws.onopen = () => { state.dashBackoff = 1000; };
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === "snapshot") {
+      state.sessions = msg.agents || [];
+    } else if (msg.type === "upsert") {
+      const i = state.sessions.findIndex((a) => a.id === msg.agent.id);
+      if (i >= 0) state.sessions[i] = msg.agent;
+      else state.sessions.push(msg.agent);
+    } else if (msg.type === "remove") {
+      state.sessions = state.sessions.filter((a) => a.id !== msg.id);
+    } else {
+      return; // context_pressure, cost_warning and friends are not ours
+    }
+    emit();
+  };
+  ws.onclose = () => {
+    state.dashWS = null;
+    setTimeout(connectDashboard, state.dashBackoff);
+    state.dashBackoff = Math.min(state.dashBackoff * 2, 15000);
   };
 }

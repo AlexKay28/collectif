@@ -179,6 +179,11 @@ type cellEditedPayload struct {
 	CellID string    `json:"cellId"`
 	Source *string   `json:"source,omitempty"`
 	Meta   *CellMeta `json:"meta,omitempty"`
+	// Type retypes the cell in place. Jupyter's y/m/r are command-mode
+	// verbs, and people use them to fix a cell they started in the wrong
+	// mode — deleting and re-adding would lose the cell's identity and
+	// every output already recorded against it.
+	Type *CellType `json:"type,omitempty"`
 }
 
 type cellMovedPayload struct {
@@ -291,6 +296,9 @@ func applyEvent(nb *Notebook, e Event) error {
 		}
 		if p.Source != nil {
 			nb.Cells[i].Source = *p.Source
+		}
+		if p.Type != nil && validCellType(*p.Type) {
+			nb.Cells[i].Type = *p.Type
 		}
 		if p.Meta != nil {
 			nb.Cells[i].Meta = *p.Meta
