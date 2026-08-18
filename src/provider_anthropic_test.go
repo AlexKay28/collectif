@@ -284,15 +284,21 @@ func TestAnthropicCredentialsPresent_DetectsEachSource(t *testing.T) {
 // initProviders must leave the loop in a usable state either way: tools are
 // always available, and a missing provider is nil rather than a broken one.
 func TestInitProviders_LeavesACleanStateWithoutCredentials(t *testing.T) {
-	prevP, prevT := activeProvider, activeTools
-	t.Cleanup(func() { activeProvider, activeTools = prevP, prevT })
+	prevP, prevList, prevT := activeProvider, activeProviders, activeTools
+	t.Cleanup(func() { activeProvider, activeProviders, activeTools = prevP, prevList, prevT })
 
-	for _, env := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BEARER_TOKEN"} {
+	// Every transport, not just Anthropic's (#53). A developer with
+	// OLLAMA_HOST exported would otherwise see this fail on their machine
+	// and nowhere else, which is the least useful kind of red.
+	for _, env := range []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BEARER_TOKEN",
+		"OPENAI_BASE_URL", "OPENAI_API_KEY", "OLLAMA_HOST",
+	} {
 		t.Setenv(env, "")
 	}
 	t.Setenv("ANTHROPIC_CONFIG_DIR", t.TempDir())
 
-	activeProvider = nil
+	activeProvider, activeProviders = nil, nil
 	initProviders()
 
 	if activeProvider != nil {

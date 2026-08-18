@@ -64,6 +64,16 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 		effort = doc.Meta.Effort
 	}
 
+	// #53: the model chosen here decides the *transport*, not just the
+	// weights. A cell that names a local model is answered by the local
+	// endpoint even though the notebook above it ran on a frontier one —
+	// which is the whole of what per-cell override is for. The provider
+	// passed in stays the fallback so a single-transport process (and
+	// every test that installs one fake) behaves exactly as before.
+	if chosen := providerForCellModel(model, p); chosen != nil {
+		p = chosen
+	}
+
 	// The projected prefix is what two runs of this cell share. Turns the
 	// loop appends below are new every time.
 	stablePrefix := len(msgs)
@@ -383,15 +393,36 @@ func toolNames() []string {
 	return names
 }
 
+// providerForCellModel resolves the transport for one cell's model,
+// falling back to the notebook's default. Returns nil only when nothing at
+// all is configured, which the caller has already refused.
+func providerForCellModel(model string, fallback Provider) Provider {
+	if len(activeProviders) == 0 {
+		return fallback
+	}
+	if p := providerForModel(model); p != nil {
+		return p
+	}
+	return fallback
+}
+
 // modelInfoFor looks a model up in the provider's own catalog, falling back
 // to a conservative window so a model we do not recognise still gets a
 // pre-flight check rather than none.
+//
+// Matching is by longest prefix (lookupModel), not equality. Equality was
+// wrong in the one case a notebook is most likely to produce: a pinned,
+// dated snapshot — claude-opus-5-20260115 — matched nothing, so it got no
+// window and, worse, no pricing, and a notebook with a dollar budget
+// refuses outright to run on a model it cannot price.
 func modelInfoFor(p Provider, model string) ModelInfo {
 	if p != nil {
-		for _, m := range p.Models() {
-			if m.ID == model || (model == "" && len(p.Models()) > 0) {
-				return m
-			}
+		catalog := p.Models()
+		if model == "" && len(catalog) > 0 {
+			return catalog[0]
+		}
+		if m, ok := lookupModel(catalog, model); ok {
+			return m
 		}
 	}
 	return ModelInfo{ID: model, ContextWindow: defaultContextLimit}

@@ -43,6 +43,14 @@ func (f *fakeProvider) Models() []ModelInfo {
 	}}
 }
 
+// The fake claims explicit caching so tests that assert on the cache
+// display exercise the same branch the Anthropic transport takes.
+func (f *fakeProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Cache: CacheExplicit, Reasoning: true, SignedReasoning: true, Effort: true, Usage: true,
+	}
+}
+
 func (f *fakeProvider) Stream(ctx context.Context, req Request) (Stream, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
