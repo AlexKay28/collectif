@@ -21,11 +21,25 @@
 
   <div id="nb-main">
     <aside id="nb-side">
-      <div class="side-label">Notebooks</div>
-      <div id="nb-list"></div>
+      <!-- #58. Search sits above the list because it answers the same
+           question the list does — which document am I opening — and the
+           filters are named for acts rather than fields, because "asked /
+           replied / ran" is the distinction a transcript cannot make. -->
+      <div class="side-search">
+        <input id="nb-q" type="search" placeholder="Search every notebook" autocomplete="off" spellcheck="false"
+               aria-label="Search every notebook">
+        <div id="nb-q-kinds"></div>
+      </div>
 
-      <div class="side-label" id="sess-label" style="display:none">Running sessions</div>
-      <div id="nb-sessions"></div>
+      <div id="nb-results" hidden></div>
+
+      <div id="nb-browse">
+        <div class="side-label">Notebooks</div>
+        <div id="nb-list"></div>
+
+        <div class="side-label" id="sess-label" style="display:none">Running sessions</div>
+        <div id="nb-sessions"></div>
+      </div>
 
       <div class="side-foot">
         <button id="nb-new" type="button">+ New notebook</button>
@@ -64,6 +78,7 @@
           <dl>
             <dt><kbd>Enter</kbd></dt><dd>edit the selected cell</dd>
             <dt><kbd>Esc</kbd> <span class="or">/</span> <kbd>Ctrl</kbd>+<kbd>M</kbd></dt><dd>back to command mode</dd>
+            <dt><kbd>/</kbd></dt><dd>search every notebook</dd>
           </dl>
 
           <h3>Run</h3>
@@ -132,6 +147,7 @@
 <script type="module">
 import { state, nbAPI, openNotebook, onChange, watchSessions, TOKEN } from "./nb.js";
 import { mountCells, showError } from "./nb_cells.js";
+import { mountSearch } from "./nb_search.js";
 import { escapeHTML } from "./nb_render.js";
 
 const list = document.getElementById("nb-list");
@@ -349,6 +365,7 @@ onChange(() => {
 });
 
 mountCells(document.getElementById("nb-cells"));
+mountSearch();
 refreshList().catch(showError);
 watchSessions();
 </script>

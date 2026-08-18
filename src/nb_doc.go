@@ -110,15 +110,21 @@ type CellMeta struct {
 // the machine's) — the distinction Jupyter got right and chat transcripts
 // lose.
 type Cell struct {
-	ID       string        `json:"id"`
-	Type     CellType      `json:"type"`
-	Source   string        `json:"source"`
-	Meta     CellMeta      `json:"meta,omitempty"`
-	Outputs  []Output      `json:"outputs,omitempty"`
-	State    CellState     `json:"state"`
-	RunID    string        `json:"runId,omitempty"`
-	Started  time.Time     `json:"started,omitempty"`
-	Duration time.Duration `json:"duration,omitempty"`
+	ID      string    `json:"id"`
+	Type    CellType  `json:"type"`
+	Source  string    `json:"source"`
+	Meta    CellMeta  `json:"meta,omitempty"`
+	Outputs []Output  `json:"outputs,omitempty"`
+	State   CellState `json:"state"`
+	RunID   string    `json:"runId,omitempty"`
+	// CreatedAt is when this cell entered the log, stamped from the
+	// envelope rather than reported by the writer. Without it the document
+	// carries no time at all for a projected turn — Started is only set by
+	// a run, and a mirrored cell never runs — so "what did I ask last
+	// Tuesday" had no field to answer from (#58).
+	CreatedAt time.Time     `json:"createdAt,omitempty"`
+	Started   time.Time     `json:"started,omitempty"`
+	Duration  time.Duration `json:"duration,omitempty"`
 	// Usage is what this cell's last run actually cost, reported by the
 	// provider rather than inferred from a transcript (#50). Zero for cell
 	// types that don't call a model.
@@ -310,6 +316,11 @@ func applyEvent(nb *Notebook, e Event) error {
 		c := p.Cell
 		if c.State == "" {
 			c.State = CellIdle
+		}
+		// The log's own timestamp, not the writer's: the same reasoning
+		// that makes Duration come from the envelope below.
+		if c.CreatedAt.IsZero() {
+			c.CreatedAt = e.At
 		}
 		at := len(nb.Cells)
 		if p.BeforeCellID != "" {

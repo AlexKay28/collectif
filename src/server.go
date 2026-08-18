@@ -66,6 +66,10 @@ func (srv *Server) Router() http.Handler {
 	// #49 notebooks — /api/nb/* for mutations, /ws/notebook/<id> for the
 	// event stream. Both inherit the auth gate below.
 	registerNotebookRoutes(mux)
+	// #58 search across those notebooks. Read-only, and read from an index
+	// beside the logs rather than from the registry, so a query cannot pin
+	// every notebook on disk open.
+	registerSearchRoutes(mux)
 	return srv.withAuth(mux)
 }
 

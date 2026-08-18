@@ -647,3 +647,119 @@ html, body {
    so depth reads as depth without inventing a second visual language. */
 .sa-body { padding-left: 4px; opacity: .92; }
 .sa-body .out { margin-top: 7px; font-size: 12px; }
+
+/* ── Search (#58) ────────────────────────────────────────────────────
+   The sidebar's job is choosing what to read, and a result is the same
+   choice made a different way — so results take the list's place rather
+   than opening a surface of their own.
+
+   The vocabulary is the one already here and nothing new is invented: the
+   snippet is mono because it is quoted machine text, the prompt beneath it
+   is serif because it is language, the filters are the same dashed mono
+   buttons as `+ New notebook`, and the only colour is the state dot on the
+   turn the match sits in. */
+
+.side-search { padding: 14px 16px 4px; }
+.side-search input {
+  width: 100%;
+  font: 12px var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule); border-radius: 3px;
+  padding: 7px 9px; outline: none;
+  -webkit-appearance: none; appearance: none;
+}
+.side-search input::placeholder { color: var(--nb-muted); }
+.side-search input:focus { border-color: var(--nb-dim); }
+
+#nb-q-kinds { display: flex; gap: 6px; margin-top: 7px; }
+#nb-q-kinds button {
+  flex: 1;
+  font: 10px var(--nb-mono); letter-spacing: .08em;
+  color: var(--nb-muted); background: transparent;
+  border: 1px dashed var(--nb-rule); border-radius: 3px;
+  padding: 4px 0; cursor: pointer;
+}
+#nb-q-kinds button:hover { color: var(--nb-dim); border-color: var(--nb-dim); }
+/* An engaged filter is stated by weight and a solid rule, never by colour —
+   the same way a selected cell is. */
+#nb-q-kinds button.on {
+  color: var(--nb-ink); border-style: solid; border-color: var(--nb-dim);
+  background: rgba(236,232,227,.05);
+}
+
+#nb-results { overflow-y: auto; }
+.sr-head, .sr-note {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  padding: 12px 16px 6px; letter-spacing: .04em;
+}
+.sr-note { font-style: italic; letter-spacing: 0; line-height: 1.5; }
+.sr-more { color: var(--nb-rule); }
+
+.sr-nb {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 12px 16px 5px;
+  border-top: 1px solid var(--nb-rule-soft);
+}
+.sr-head + .sr-group .sr-nb { border-top: 0; }
+.sr-nb-title {
+  font: 13px/1.3 var(--nb-serif); color: var(--nb-ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sr-cli, .sr-count { font: 10px var(--nb-mono); color: var(--nb-muted); }
+.sr-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.sr-hit {
+  padding: 7px 16px 9px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.sr-hit:hover { background: rgba(236,232,227,.04); border-left-color: var(--nb-rule); }
+
+.sr-meta { display: flex; align-items: baseline; gap: 7px; }
+.sr-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--nb-muted); align-self: center;
+}
+.sr-hit.state-ok .sr-dot { background: var(--nb-ok); }
+.sr-hit.state-running .sr-dot { background: var(--nb-run); }
+.sr-hit.state-error .sr-dot { background: var(--nb-err); }
+.sr-hit.state-interrupted .sr-dot { background: var(--nb-run); }
+.sr-hit.state-stale .sr-dot { background: var(--nb-stale); }
+.sr-kind {
+  font: 9.5px var(--nb-mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--nb-muted);
+}
+.sr-tool { font: 10px var(--nb-mono); color: var(--nb-dim); }
+.sr-agent {
+  font: 9.5px var(--nb-mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--nb-stale);
+}
+
+.sr-snip {
+  font: 11.5px/1.45 var(--nb-mono); color: var(--nb-dim);
+  margin-top: 3px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
+/* The turn's own question, under a match that was not the question. It is
+   quieter than the snippet because it is context rather than the find —
+   but it is what makes a match inside a subagent mean anything at all. */
+.sr-in {
+  font: italic 11px/1.4 var(--nb-serif); color: var(--nb-muted);
+  margin-top: 3px; padding-left: 9px;
+  border-left: 1px solid var(--nb-rule-soft);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Where a search result lands. Neutral, and gone in a second and a half:
+   colour in this notebook means state, and "you were sent here" is not a
+   state a cell can be in. */
+.nb-cell.found { animation: nb-found 1.6s ease-out; }
+@keyframes nb-found {
+  from { background: rgba(236,232,227,.09); }
+  to   { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nb-cell.found { animation: none; box-shadow: inset 0 0 0 1px var(--nb-rule); }
+}

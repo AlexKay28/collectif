@@ -165,13 +165,17 @@ func handleNotebookRoot(w http.ResponseWriter, r *http.Request, st *notebookStor
 			http.Error(w, "close notebook: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// The log is the notebook; the snapshot is a cache of it. Remove
-		// both, and treat a missing snapshot as already done.
+		// The log is the notebook; the snapshot and the search index are
+		// caches of it. Remove all three, and treat a missing cache as
+		// already done. An index left behind would keep offering search
+		// results that open a document that no longer exists (#58).
 		if err := os.Remove(filepath.Join(dir, slug+".jsonl")); err != nil && !os.IsNotExist(err) {
 			http.Error(w, "delete notebook: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		_ = os.Remove(filepath.Join(dir, slug+".snap.json"))
+		_ = os.Remove(searchIndexPath(dir, slug))
+		forgetSearchIndex(dir, slug)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:

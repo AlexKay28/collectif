@@ -79,6 +79,25 @@ function cssEscape(s) {
   return String(s).replace(/["\\]/g, "\\$&");
 }
 
+// revealCell selects a cell and brings it into view. A search result that
+// opens the right notebook and leaves you at the top of a three-hundred-cell
+// document has not answered the question — the point of the result is the
+// turn, not the file (#58).
+//
+// The brief mark afterwards is neutral rather than coloured: in this
+// notebook colour means state, and a cell you were sent to is not a state.
+export function revealCell(id) {
+  state.mode = "command";
+  state.selected = id;
+  render();
+  const el = root?.querySelector(`[data-cell="${cssEscape(id)}"]`);
+  if (!el) return;
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+  el.classList.add("found");
+  setTimeout(() => el.classList.remove("found"), 1600);
+}
+
 // A cell is a margin note plus a body. Which typeface the source gets is
 // not decoration: markdown and prompt sources are language and set in a
 // serif, shell sources and every output are code and set in mono. The page
