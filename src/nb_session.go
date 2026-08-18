@@ -82,7 +82,18 @@ type sessionProjector struct {
 	// can be paired with it.
 	approvalKey string
 	approvalID  string
-	closed      bool
+	// subagentCell maps a child agent to the turn that spawned it, and
+	// heldSubagent parks a child's work until that link is known — the two
+	// arrive in either order depending on whether the delegation was
+	// synchronous (#55a).
+	subagentCell map[string]subagentLink
+	heldSubagent map[string][]TranscriptPart
+	closed       bool
+}
+
+type subagentLink struct {
+	cellID    string
+	agentType string
 }
 
 func newSessionProjector(st *notebookStore) *sessionProjector {
@@ -119,9 +130,15 @@ func (p *sessionProjector) reseedFromDocument() {
 // single line are handled together because the line, not the part, is the
 // unit the CLI assigns an id to.
 func (p *sessionProjector) Ingest(parts []TranscriptPart) {
+	// Children whose parent link arrived during this pass. Released after
+	// the lock is dropped: IngestSubagent takes p.mu itself, and appending
+	// to the store under our own lock is exactly the pattern the store's
+	// own comment warns against.
+	var release []string
+
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
+		p.mu.Unlock()
 		return
 	}
 	for _, part := range parts {
@@ -137,8 +154,24 @@ func (p *sessionProjector) Ingest(parts []TranscriptPart) {
 		if part.UUID == "" || p.seen[part.UUID] {
 			continue
 		}
+		if part.Kind == PartToolResult && part.AgentID != "" && p.current != "" {
+			if p.linkSubagentLocked(part.AgentID, part.AgentType, p.current) {
+				release = append(release, part.AgentID)
+			}
+		}
 		if p.apply(part) {
 			p.seen[part.UUID] = true
+		}
+	}
+	p.mu.Unlock()
+
+	for _, agentID := range release {
+		p.mu.Lock()
+		held := p.heldSubagent[agentID]
+		delete(p.heldSubagent, agentID)
+		p.mu.Unlock()
+		if len(held) > 0 {
+			p.IngestSubagent(agentID, held)
 		}
 	}
 }
@@ -235,6 +268,9 @@ func (p *sessionProjector) apply(part TranscriptPart) bool {
 		out := Output{
 			Type: OutputToolResult, Text: part.Text,
 			Data: map[string]any{"sourceUuid": part.UUID, "toolUseId": part.ToolUseID},
+		}
+		if part.AgentID != "" {
+			out.Data["spawnedAgentId"] = part.AgentID
 		}
 		if part.IsError {
 			// The model treats a failed tool result as ordinary input and
@@ -616,3 +652,131 @@ func checkSessionDrivable(sessionID string) error {
 var errAgentWaiting = errors.New(
 	"the agent is waiting on an answer — respond to it before sending a new prompt, " +
 		"or it will read the prompt as the answer")
+
+// ─── Subagents (#55a) ───────────────────────────────────────────────────
+//
+// A parent turn that delegates shows an Agent call and its result with
+// nothing in between, and that gap is usually the majority of what the
+// agent did. The child's conversation lives in its own transcript, and the
+// parent's tool result names it — so the attachment is by the link the
+// format gives us, never by "whichever turn happened to be open".
+//
+// Ordering runs both ways and neither is the exception. A background
+// launch reports its child id immediately and the work arrives over the
+// following minutes; a synchronous Agent call writes the child's whole
+// transcript first and names it only in the result. So child work that
+// arrives before its link is held, and released when the link shows up.
+
+// maxHeldSubagentParts bounds work held for a child that nothing has
+// claimed yet. A child whose result never arrives — a crashed parent, a
+// transcript we started reading mid-session — would otherwise accumulate
+// for as long as the session runs. Dropping the oldest is right: the tail
+// of a subagent's conversation is the part that concludes something.
+const maxHeldSubagentParts = 200
+
+// linkSubagentLocked records that a child belongs to a turn. Caller holds
+// p.mu. Reports whether this call established the link, so the caller
+// knows to release whatever was held for that child once it can.
+func (p *sessionProjector) linkSubagentLocked(agentID, agentType, cellID string) bool {
+	if p.subagentCell == nil {
+		p.subagentCell = map[string]subagentLink{}
+	}
+	if _, ok := p.subagentCell[agentID]; ok {
+		return false // already linked; a second result changes nothing
+	}
+	p.subagentCell[agentID] = subagentLink{cellID: cellID, agentType: agentType}
+	return true
+}
+
+// IngestSubagent folds one child transcript's parts into its parent's cell.
+func (p *sessionProjector) IngestSubagent(agentID string, parts []TranscriptPart) {
+	p.mu.Lock()
+	if p.closed || agentID == "" {
+		p.mu.Unlock()
+		return
+	}
+	link, linked := p.subagentCell[agentID]
+	if !linked {
+		// Nothing claims this child yet. Hold it rather than guessing a
+		// parent, and rather than dropping work we will be able to place
+		// in a moment.
+		if p.heldSubagent == nil {
+			p.heldSubagent = map[string][]TranscriptPart{}
+		}
+		kept := append(p.heldSubagent[agentID], parts...)
+		if len(kept) > maxHeldSubagentParts {
+			kept = kept[len(kept)-maxHeldSubagentParts:]
+		}
+		p.heldSubagent[agentID] = kept
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+
+	for _, part := range parts {
+		if part.UUID == "" {
+			continue // unidentifiable, and so undedupable across restarts
+		}
+		p.mu.Lock()
+		if p.seen[part.UUID] {
+			p.mu.Unlock()
+			continue
+		}
+		p.mu.Unlock()
+
+		out, ok := subagentOutput(part, agentID, link.agentType)
+		if !ok {
+			continue
+		}
+		if _, err := p.st.Append(evOutputAppended, outputAppendedPayload{
+			CellID: link.cellID, Output: out,
+		}); err != nil {
+			continue
+		}
+		p.mu.Lock()
+		p.seen[part.UUID] = true
+		p.mu.Unlock()
+	}
+}
+
+// subagentOutput renders one child part with the same vocabulary the
+// parent's own work uses — a tool call is a tool call whoever made it —
+// tagged so the renderer can nest it under the child that produced it.
+func subagentOutput(part TranscriptPart, agentID, agentType string) (Output, bool) {
+	data := map[string]any{
+		"sourceUuid": part.UUID,
+		"agentId":    agentID,
+	}
+	if agentType != "" {
+		data["agentType"] = agentType
+	}
+	switch part.Kind {
+	case PartAssistantText, PartUserText:
+		// A child's "user" turn is the task it was given, not a person
+		// typing, so both render as the child's own words.
+		if strings.TrimSpace(part.Text) == "" {
+			return Output{}, false
+		}
+		return Output{Type: OutputText, Text: part.Text, Data: data}, true
+	case PartThinking:
+		return Output{Type: OutputThinking, Text: part.Text, Data: data}, true
+	case PartToolCall:
+		data["name"] = part.ToolName
+		data["toolUseId"] = part.ToolUseID
+		if len(part.ToolInput) > 0 {
+			var in any
+			if json.Unmarshal(part.ToolInput, &in) == nil {
+				data["input"] = in
+			}
+		}
+		return Output{Type: OutputToolCall, Data: data}, true
+	case PartToolResult:
+		data["toolUseId"] = part.ToolUseID
+		if part.IsError {
+			data["isError"] = true
+		}
+		return Output{Type: OutputToolResult, Text: part.Text, Data: data}, true
+	}
+	// Injections and interruptions inside a child are noise at this depth.
+	return Output{}, false
+}

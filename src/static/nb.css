@@ -617,3 +617,33 @@ html, body {
   font: 11.5px/1.5 var(--nb-mono); color: var(--nb-muted);
   white-space: pre-wrap; word-break: break-word;
 }
+
+/* ── Subagents (#55a) ────────────────────────────────────────────────
+   A delegated child, nested under the turn that spawned it. Indented
+   rather than boxed: it is the same kind of content as its parent —
+   messages and tool calls — made by a different agent, and a border
+   would suggest it is a different kind of thing. Collapsed by default
+   because the parent's narrative is what is being read; the child is
+   there for when the answer is surprising. */
+.out.subagent {
+  border-left: 1px dashed var(--nb-rule);
+  padding: 0 0 0 13px; margin: 10px 0 0;
+}
+.out.subagent > summary {
+  cursor: pointer; list-style: none;
+  font: 11px var(--nb-mono); color: var(--nb-dim);
+  padding: 3px 0; display: flex; gap: 10px; align-items: baseline;
+}
+.out.subagent > summary::-webkit-details-marker { display: none; }
+.out.subagent > summary::before { content: "▸"; color: var(--nb-muted); }
+.out.subagent[open] > summary::before { content: "▾"; }
+.out.subagent > summary:hover { color: var(--nb-ink); }
+.sa-kind {
+  color: var(--nb-stale); letter-spacing: .04em;
+}
+.sa-count { color: var(--nb-muted); font-size: 10.5px; }
+
+/* The child's own outputs sit one step further in and a shade quieter,
+   so depth reads as depth without inventing a second visual language. */
+.sa-body { padding-left: 4px; opacity: .92; }
+.sa-body .out { margin-top: 7px; font-size: 12px; }

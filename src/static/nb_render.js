@@ -136,12 +136,35 @@ export function renderOutputs(cell, liveText) {
   // thirty of them, and thirty separate lines would be worse than hiding
   // them entirely — the reason they are recorded is that they are findable
   // when something surprising happened, not that they are worth reading.
+  // A subagent's turns are tagged with the child that produced them.
+  // Gathered into one nested block per child and drawn where the child
+  // first appears — a delegating turn otherwise shows an Agent call and a
+  // result with nothing between them, and what is missing is usually most
+  // of what happened.
+  const agents = new Map();
+  for (const o of outs) {
+    const id = (o.data || {}).agentId;
+    if (!id) continue;
+    if (!agents.has(id)) agents.set(id, []);
+    agents.get(id).push(o);
+  }
+
   const parts = [];
+  const drawn = new Set();
   let run = [];
   const flush = () => {
     if (run.length) { parts.push(renderInjections(run)); run = []; }
   };
   for (const o of outs) {
+    const agentId = (o.data || {}).agentId;
+    if (agentId) {
+      flush();
+      if (!drawn.has(agentId)) {
+        drawn.add(agentId);
+        parts.push(renderSubagent(agentId, agents.get(agentId)));
+      }
+      continue;
+    }
     if (o.type === "injection") { run.push(o); continue; }
     flush();
     if (o.type === "approval") {
@@ -177,6 +200,26 @@ function renderInjections(outs) {
               <span class="inj-total">${fmtBytes(total)} the model read that nobody typed</span>
             </summary>
             ${rows}
+          </details>`;
+}
+
+// One delegated child: collapsed to a line naming what it was and how
+// much it did, expandable to its whole conversation. Collapsed by default
+// because the parent's own narrative is the thing being read — the child
+// is there for when the answer is surprising.
+function renderSubagent(agentId, outs) {
+  const kind = (outs.find((o) => (o.data || {}).agentType) || { data: {} }).data.agentType || "subagent";
+  const calls = outs.filter((o) => o.type === "tool_call").length;
+  const said = outs.filter((o) => o.type === "text").length;
+  const bits = [];
+  if (calls) bits.push(`${calls} tool call${calls === 1 ? "" : "s"}`);
+  if (said) bits.push(`${said} message${said === 1 ? "" : "s"}`);
+
+  return `<details class="out subagent">
+            <summary><span class="sa-kind">${escapeHTML(kind)}</span>
+              <span class="sa-count">${escapeHTML(bits.join(", ") || "no output yet")}</span>
+            </summary>
+            <div class="sa-body">${outs.map(renderOutput).join("")}</div>
           </details>`;
 }
 

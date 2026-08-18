@@ -255,7 +255,7 @@ const fidelityBar = document.getElementById("nb-fidelity");
 
 function renderFidelity(nb) {
   const f = nb?.fidelity;
-  if (!f || (f.turns && f.approvals && f.send)) {
+  if (!f || (f.turns && f.approvals && f.send && f.subagents && f.usage)) {
     fidelityBar.style.display = "none";
     return;
   }
@@ -264,6 +264,7 @@ function renderFidelity(nb) {
     escapeHTML(f.cli) + "</b>'s transcript format");
   if (!f.approvals) missing.push("permission requests will not appear here");
   if (!f.usage) missing.push("token counts are unavailable");
+  if (!f.subagents) missing.push("work it delegates to subagents will not be nested here");
 
   const can = [];
   if (f.send) can.push("send prompts");

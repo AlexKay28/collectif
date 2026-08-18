@@ -795,3 +795,137 @@ func TestProjectClaude_ASurprisingScalarDoesNotDiscardTheTurn(t *testing.T) {
 		t.Errorf("text = %q", parts[0].Text)
 	}
 }
+
+// ─── Subagents (#55a) ───────────────────────────────────────────────────
+//
+// A parent turn that delegates currently shows an Agent tool call and its
+// result with nothing in between — and that gap is often the majority of
+// what the agent did. The child's conversation lives in
+// `<session>/subagents/agent-<id>.jsonl`, which P0 proved this same parser
+// reads unchanged.
+//
+// What was missing was the link. It turns out to be exact rather than
+// inferred: the parent's tool_result carries `toolUseResult.agentId`, which
+// is the child file's name. Surveyed across every transcript on this
+// machine: 478 agentId-bearing results, spawned by `Agent` (475) and
+// `Skill` (3). No heuristic needed, and none should be used — attaching a
+// child to "whatever turn was open" would be a guess where the data has an
+// answer.
+
+func TestProjectClaude_AgentResultCarriesTheChildsID(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"s1","timestamp":"2026-08-17T09:49:16.423Z",
+	  "message":{"role":"user","content":[
+	    {"type":"tool_result","tool_use_id":"toolu_1","content":"done"}]},
+	  "toolUseResult":{"status":"completed","agentId":"a3849ed00b115f042",
+	    "agentType":"general-purpose","totalTokens":45534,"totalToolUseCount":29,
+	    "totalDurationMs":103614}}`)
+
+	if len(parts) != 1 {
+		t.Fatalf("got %d parts, want 1: %+v", len(parts), parts)
+	}
+	p := parts[0]
+	if p.Kind != PartToolResult {
+		t.Fatalf("kind = %q, want tool_result", p.Kind)
+	}
+	// The link. Without it there is no way to attach a child transcript to
+	// the turn that spawned it except by guessing.
+	if p.AgentID != "a3849ed00b115f042" {
+		t.Errorf("agentId = %q, want a3849ed00b115f042", p.AgentID)
+	}
+	if p.AgentType != "general-purpose" {
+		t.Errorf("agentType = %q", p.AgentType)
+	}
+}
+
+// A background launch reports the id immediately and the work happens
+// afterwards. Both flavours have to yield the same link — 406 of the 478
+// results on this machine are async.
+func TestProjectClaude_AsyncAgentLaunchAlsoCarriesTheID(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"s2","timestamp":"2026-08-17T09:49:16.423Z",
+	  "message":{"role":"user","content":[
+	    {"type":"tool_result","tool_use_id":"toolu_2","content":"launched"}]},
+	  "toolUseResult":{"status":"async_launched","agentId":"aae89cd004e57c852",
+	    "agentType":"code-reviewer"}}`)
+
+	if len(parts) != 1 || parts[0].AgentID != "aae89cd004e57c852" {
+		t.Fatalf("an async launch did not report its child: %+v", parts)
+	}
+}
+
+// A forked skill spawns a child too, and names it differently.
+func TestProjectClaude_ForkedSkillCarriesTheID(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"s3","timestamp":"2026-08-17T09:49:16.423Z",
+	  "message":{"role":"user","content":[
+	    {"type":"tool_result","tool_use_id":"toolu_3","content":"Running in the background"}]},
+	  "toolUseResult":{"success":true,"commandName":"code-review","status":"forked",
+	    "background":true,"agentId":"a95b4e04f977fdd33"}}`)
+
+	if len(parts) != 1 || parts[0].AgentID != "a95b4e04f977fdd33" {
+		t.Fatalf("a forked skill did not report its child: %+v", parts)
+	}
+	if parts[0].AgentType != "code-review" {
+		t.Errorf("agentType = %q, want the command name", parts[0].AgentType)
+	}
+}
+
+// An ordinary tool result must not grow a phantom child.
+func TestProjectClaude_OrdinaryResultsHaveNoAgentID(t *testing.T) {
+	parts := projectLine(t, `{
+	  "type":"user","uuid":"s4","timestamp":"2026-08-17T09:49:16.423Z",
+	  "message":{"role":"user","content":[
+	    {"type":"tool_result","tool_use_id":"toolu_4","content":"file contents"}]},
+	  "toolUseResult":{"stdout":"file contents","stderr":""}}`)
+
+	if len(parts) != 1 || parts[0].AgentID != "" {
+		t.Fatalf("a plain tool result claimed a subagent: %+v", parts)
+	}
+}
+
+// toolUseResult is another field whose shape we do not control, and the
+// polymorphic-content bug is fresh enough to test for here rather than
+// discover later.
+func TestProjectClaude_AWeirdToolUseResultDoesNotDiscardTheLine(t *testing.T) {
+	for _, tur := range []string{`"just a string"`, `[1,2,3]`, `null`, `{"agentId":42}`} {
+		parts := projectLine(t, `{
+		  "type":"user","uuid":"s5","timestamp":"2026-08-17T09:49:16.423Z",
+		  "message":{"role":"user","content":[
+		    {"type":"tool_result","tool_use_id":"toolu_5","content":"ok"}]},
+		  "toolUseResult":`+tur+`}`)
+		if len(parts) != 1 {
+			t.Errorf("toolUseResult=%s cost us the whole result: %+v", tur, parts)
+		}
+	}
+}
+
+// ─── Locating the child ─────────────────────────────────────────────────
+
+func TestClaudeAdapter_SubagentPathIsDerivedFromTheParentTranscript(t *testing.T) {
+	got, ok := (&claudeAdapter{}).SubagentTranscriptPath(
+		"/home/u/.claude/projects/-p/abc.jsonl", "a95b4e04f977fdd33")
+	if !ok {
+		t.Fatal("no subagent path for a session that has one")
+	}
+	want := "/home/u/.claude/projects/-p/abc/subagents/agent-a95b4e04f977fdd33.jsonl"
+	if got != want {
+		t.Errorf("path = %q\n want %q", got, want)
+	}
+}
+
+// The id comes out of someone else's JSON and is about to become a path
+// component. It has to be refused if it is not the shape we expect.
+func TestClaudeAdapter_SubagentPathRefusesAnUnsafeID(t *testing.T) {
+	for _, id := range []string{"", "../../etc/passwd", "a/b", "a\x00b", strings.Repeat("z", 200), "A9-!"} {
+		if got, ok := (&claudeAdapter{}).SubagentTranscriptPath("/p/abc.jsonl", id); ok {
+			t.Errorf("id %q was accepted and produced %q", id, got)
+		}
+	}
+}
+
+func TestClaudeAdapter_SubagentPathNeedsATranscript(t *testing.T) {
+	if _, ok := (&claudeAdapter{}).SubagentTranscriptPath("", "a95b4e04f977fdd33"); ok {
+		t.Error("a subagent path was produced with no parent transcript to hang it off")
+	}
+}

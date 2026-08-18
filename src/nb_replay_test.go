@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"testing"
+	"time"
 )
 
 // #47 P0 — the demonstration harness.
@@ -50,6 +51,12 @@ func TestDev_ReplayTranscriptIntoANotebook(t *testing.T) {
 	defer p.Close()
 
 	a := &claudeAdapter{}
+	// Follow the children too, so a replay shows what a live session
+	// would (#55a). Started before the parent is read: the links are
+	// learned as the parent's results go by, and held work is released
+	// the moment each link lands.
+	defer watchSubagents(p, a, path)()
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	var lines int
@@ -63,6 +70,8 @@ func TestDev_ReplayTranscriptIntoANotebook(t *testing.T) {
 			p.Ingest(parts)
 		}
 	}
+	// Give the follower a moment to drain the children it just learned about.
+	time.Sleep(2 * time.Second)
 	p.Close()
 
 	doc := st.Doc()

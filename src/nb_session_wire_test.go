@@ -187,9 +187,22 @@ func TestSessionNotebook_TranscriptBecomesADocumentWhileTheSessionRuns(t *testin
 
 	// The usage path must keep working — projection is additional, not a
 	// replacement, and breaking the counters would regress #42.
-	s.mu.Lock()
-	msgs := s.MessageCount
-	s.mu.Unlock()
+	//
+	// Polled rather than read once: within a tick the projector appends to
+	// the notebook *inside* the line loop while the counters are written
+	// after it, so cells are visible slightly before MessageCount is.
+	// Reading it immediately made this fail one run in five.
+	deadline := time.Now().Add(3 * time.Second)
+	var msgs int
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		msgs = s.MessageCount
+		s.mu.Unlock()
+		if msgs == 2 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	if msgs != 2 {
 		t.Errorf("MessageCount = %d, want 2 — projection broke the usage watcher", msgs)
 	}
@@ -204,7 +217,7 @@ func appendLine(t *testing.T, path, line string) {
 	defer f.Close()
 	// Collapse the test's indentation so the file holds one JSON object
 	// per line, exactly as the CLI writes it.
-	if _, err := f.WriteString(strings.Join(strings.Fields(line), " ") + "\n"); err != nil {
+	if _, err := f.WriteString(collapseWS(line) + "\n"); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 }
@@ -256,4 +269,10 @@ func TestSessionJSON_CarriesTheNotebookIDOnceOneExists(t *testing.T) {
 	if got := s.toJSON()["notebook"]; got != st.slug {
 		t.Errorf("notebook = %v, want %q", got, st.slug)
 	}
+}
+
+// collapseWS folds a test's indented JSON literal onto one line, which is
+// how a transcript is actually written.
+func collapseWS(line string) string {
+	return strings.Join(strings.Fields(line), " ")
 }

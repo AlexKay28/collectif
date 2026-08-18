@@ -25,6 +25,8 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -152,6 +154,20 @@ type TranscriptPart struct {
 	// most injectionExcerptMax. The reader has to be able to tell a
 	// one-line reminder from a forty-kilobyte document.
 	Size int
+
+	// AgentID names a subagent this result spawned, and is the exact link
+	// between a parent turn and the child transcript at
+	// `<session>/subagents/agent-<AgentID>.jsonl` (#55a). Empty on every
+	// other kind of result.
+	//
+	// It is worth stressing that this is a link the format gives us rather
+	// than one we infer. Attaching a child to "whichever turn was open" is
+	// the kind of guess that reads correctly for months and then does not.
+	AgentID string
+
+	// AgentType is what the child was: an agent type for an Agent call, a
+	// command name for a forked skill.
+	AgentType string
 }
 
 // ─── Claude Code ────────────────────────────────────────────────────────
@@ -197,6 +213,34 @@ type claudeLine struct {
 
 	Message    *claudeMessage    `json:"message"`
 	Attachment *claudeAttachment `json:"attachment"`
+
+	// ToolUseResult is the structured payload beside a tool_result. Raw
+	// because its shape varies wildly by tool — an object for most, a bare
+	// string or a list for others — and a mismatch here would discard the
+	// tool result it belongs to.
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+}
+
+// spawnedAgent reads the subagent link out of a tool result's structured
+// payload, if there is one. Returns ("", "") for the overwhelming majority
+// of results, which spawned nothing.
+func (l claudeLine) spawnedAgent() (id, kind string) {
+	if len(l.ToolUseResult) == 0 {
+		return "", ""
+	}
+	var m map[string]any
+	if json.Unmarshal(l.ToolUseResult, &m) != nil {
+		return "", "" // a string, a list, null — not a spawn
+	}
+	id, _ = m["agentId"].(string)
+	if id == "" {
+		return "", ""
+	}
+	// An Agent call names its agent type; a forked skill names the command.
+	if kind, _ = m["agentType"].(string); kind == "" {
+		kind, _ = m["commandName"].(string)
+	}
+	return id, kind
 }
 
 // claudeAttachment is hook output and other harness-authored context. It
@@ -436,6 +480,7 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 			p.ToolUseID = b.ToolUseID
 			p.IsError = b.IsError
 			p.Text = flattenClaudeResult(b.Content)
+			p.AgentID, p.AgentType = line.spawnedAgent()
 
 		default:
 			continue // a block type this version does not know
@@ -614,4 +659,34 @@ func parseClaudeTime(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// ─── Locating a subagent's transcript ───────────────────────────────────
+
+// agentIDRe bounds what may become a path component. The id comes out of
+// another program's JSON and is about to be joined onto a directory we
+// then read, so it is validated rather than trusted — a `..` here would be
+// a file-read primitive handed to whatever wrote the transcript.
+//
+// The ids observed in practice are lowercase hex, but the guard is about
+// path safety rather than format conformance: no separators and no dots,
+// so `..` and `a/b` cannot be expressed. Rejecting a valid id for its case
+// would lose a subagent for no gain in safety.
+var agentIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// SubagentTranscriptPath returns where Claude Code keeps a child agent's
+// conversation, given the parent session's transcript path.
+//
+// The convention is `<transcript-dir>/<session-id>/subagents/agent-<id>.jsonl`
+// — the parent transcript is `<session-id>.jsonl` in the same directory, so
+// the child directory is that path with the extension dropped.
+func (a *claudeAdapter) SubagentTranscriptPath(parentTranscript, agentID string) (string, bool) {
+	if parentTranscript == "" || !agentIDRe.MatchString(agentID) {
+		return "", false
+	}
+	base := strings.TrimSuffix(parentTranscript, filepath.Ext(parentTranscript))
+	if base == parentTranscript || base == "" {
+		return "", false // no extension to drop; not a shape we recognise
+	}
+	return filepath.Join(base, "subagents", "agent-"+agentID+".jsonl"), true
 }
