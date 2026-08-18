@@ -323,6 +323,23 @@ func (st *notebookStore) Doc() *Notebook {
 	return doc
 }
 
+// docAndLastEvent returns the document together with the id of the last
+// event folded into it, under one lock.
+//
+// Taking them separately is not the same thing: Append writes the log line
+// and publishes the new document as two steps, so a reader between them
+// would pair a document with a log position it does not yet include. That
+// is exactly the pairing a derived cache must never store — it would verify
+// as current while missing the newest turn (#58).
+func (st *notebookStore) docAndLastEvent() (*Notebook, string) {
+	st.mu.Lock()
+	doc := st.nb.clone()
+	last := st.lastEventID
+	st.mu.Unlock()
+	doc.Fidelity = fidelityFor(doc)
+	return doc, last
+}
+
 // Close flushes a final snapshot and releases the log handle.
 func (st *notebookStore) Close() error {
 	st.mu.Lock()
