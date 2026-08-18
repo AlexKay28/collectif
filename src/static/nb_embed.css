@@ -1,0 +1,87 @@
+/* nb_embed.css — the panel the dashboard puts a notebook in. #56, D8'.
+
+   Everything a cell is made of comes from nb_cells.css, unchanged. This
+   file is only the frame: how the document is scrolled, where the view
+   switch sits, and what a session with no document says instead.
+
+   The document keeps its own paper. The notebook's ground is warmer and
+   darker than the dashboard's panels, and that difference is doing work —
+   it marks where the dashboard's chrome stops and the record of what an
+   agent did begins. Restyling the cells to match the dashboard would blur
+   exactly the line this phase exists to draw. */
+
+/* ── The view switch ──────────────────────────────────────────────────
+   Dashboard chrome, not notebook chrome: it lives in the session header
+   next to Copy and Kill, and it is written in the dashboard's own tokens.
+   A segmented control rather than tabs, because these are two views of one
+   thing rather than two things. */
+.view-switch {
+  display: flex;
+  border: 1px solid var(--border, #2a2a2a); border-radius: 6px;
+  overflow: hidden;
+}
+.view-switch button {
+  background: transparent; border: 0; cursor: pointer;
+  padding: 5px 11px;
+  font-size: 11px; letter-spacing: .04em;
+  color: var(--muted, #888);
+}
+.view-switch button + button { border-left: 1px solid var(--border, #2a2a2a); }
+.view-switch button:hover { color: var(--text, #eee); }
+.view-switch button.on {
+  background: var(--panel, #161b22);
+  color: var(--text, #eee);
+}
+
+/* ── The document ─────────────────────────────────────────────────── */
+
+#nb-embed {
+  flex: 1 1 0; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  background: var(--nb-ground);
+  color: var(--nb-ink);
+  font: 16px/1.6 var(--nb-serif);
+}
+
+/* Sticky so the two links stay reachable in a long session. Faded into
+   the ground rather than ruled off it: a second header bar directly under
+   the session header would read as another panel. */
+.nb-embed-head {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 10px 22px 8px;
+  background: linear-gradient(var(--nb-ground) 70%, transparent);
+}
+.nb-embed-head .sp { flex: 1; }
+.nb-embed-head a {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted); text-decoration: none;
+}
+.nb-embed-head a:hover { color: var(--nb-dim); }
+
+#nb-embed #nb-cells { max-width: 820px; padding: 0 22px 80px; }
+#nb-embed #nb-fidelity { max-width: 820px; margin: 0 22px 14px; }
+#nb-embed #nb-error { padding: 8px 22px; }
+
+/* ── No document ──────────────────────────────────────────────────────
+   Two different absences with two different answers: a transcript that has
+   not been written yet, and a CLI whose transcript collectif cannot read
+   at all (D11). Saying "not yet" about the second is a promise we do not
+   keep, so the copy is chosen in nb_embed.js and only its setting is here.
+   Quiet, and in the notebook's own voice — this is a gap in the document,
+   not an error the dashboard is reporting. */
+.nb-embed-empty {
+  max-width: 60ch; padding: 26px 22px;
+  font: 14.5px/1.65 var(--nb-serif); color: var(--nb-dim);
+}
+.nb-embed-empty p { margin: 0 0 12px; }
+.nb-embed-empty .why { font-size: 13px; color: var(--nb-muted); }
+.nb-embed-empty b { color: var(--nb-ink); font-weight: 400; }
+.nb-embed-empty button {
+  font: 11px var(--nb-mono); letter-spacing: .06em;
+  color: var(--nb-dim); background: transparent;
+  border: 1px dashed var(--nb-rule); border-radius: 3px;
+  padding: 6px 12px; cursor: pointer;
+}
+.nb-embed-empty button:hover {
+  color: var(--nb-ink); border-color: var(--nb-dim); border-style: solid;
+}

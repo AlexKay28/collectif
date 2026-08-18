@@ -223,8 +223,12 @@ func TestHandleCLIList_CapabilitiesShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("capabilities not an object: %v", claude["capabilities"])
 	}
+	// transcriptContent joined the wire in #56: the session view has to be
+	// able to say *why* a selected session has no document, and "collectif
+	// cannot read this CLI's transcript format" is a different answer from
+	// "no turn has been written yet". Without it the panel could only shrug.
 	for _, k := range []string{"hooks", "structuredTranscript", "toolCallEvents",
-		"subagentFiles", "preCompact", "sessionIdPinning"} {
+		"subagentFiles", "preCompact", "sessionIdPinning", "transcriptContent"} {
 		v, present := caps[k]
 		if !present {
 			t.Errorf("capabilities.%s missing", k)

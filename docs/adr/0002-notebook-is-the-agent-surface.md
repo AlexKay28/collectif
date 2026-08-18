@@ -240,7 +240,7 @@ now about what a projected session can do, not about growing a competing agent.
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; low priority — a CLI has already chosen its provider |
 | M5 MCP (#54) | core | ~~unchanged~~ **spiked; client declined.** Corrected 2026-08-17: every CLI collectif spawns already speaks MCP, so a client of our own serves only the smaller surface. The [spike](../spikes/54-the-clis-own-mcp.md) then found the transcript already carries everything a notebook could render — server, tool, arguments, result, failure, even the authentication handshake — because an MCP call is an ordinary tool call whose *name* is the entire signal. Shipped as a name split and a fidelity surface. The client is not worth building: it would duplicate the connection rather than the information, and the one thing it could genuinely add is the health of *our* connection to a server, which says nothing about the CLI's. Measured: 38 MCP calls among 39 942 tool calls, in 3 of 529 transcripts |
 | M6 subagents (#55) | our `task` tool | **55a done.** The correlation turned out to be exact rather than inferred — the parent's tool result carries `toolUseResult.agentId`, which names the child's file. Verified against every delegation on this machine: 478 reported, 478 located, none missing. A directory follower reads the children and nests their work into the turn that spawned it. 55b (our own `task` tool) remains deferred |
-| M7 default surface (#56) | notebook replaces dashboard | **reversed.** The notebook replaces the terminal *panel*; the dashboard stays the front door. Half its scope already shipped — `cliExecutor` as P1's send path, the degraded badge as P2's fidelity block |
+| M7 default surface (#56) | notebook replaces dashboard | **Done, reversed.** The notebook replaces the terminal *panel*; the dashboard stays the front door. Half its scope had already shipped — `cliExecutor` as P1's send path, the degraded badge as P2's fidelity block — and the rest was a UI integration, below |
 
 P0 before P1 because a read-only projection is falsifiable in an afternoon and
 answers the only question that can kill this: whether the transcript carries
@@ -377,6 +377,53 @@ its own transcript off. Before ADR 0002 that cost telemetry. Now it costs the
 entire notebook: no transcript, no projection, no document, and nothing
 anywhere saying why. Every adapter now scrubs the parent's session identity.
 
+### M7 — two pages stopped being two pages
+
+Everything D8′ needs existed before this phase and none of it was reachable
+in one place. `/` had a terminal per session and `/notebook.html` had the
+same sessions' documents, and the two linked to each other — which is a
+sitemap, not a product. Selecting a session in the dashboard now shows its
+notebook where the xterm panel was, with **Notebook / Terminal** in the
+session header. It is the same code either way: `nb_cells.js`,
+`nb_render.js` and the WS transport are mounted unmodified, and the CSS was
+split so the vocabulary of a cell is shared while the page furniture
+(`html`/`body`, sidebar, keyboard overlay) stays behind on the page that is
+a page. Two renderers of one document would have been the same mistake as
+two truths in D1′'s rejected alternative.
+
+Making the notebook the default view changed a behaviour that was not
+obviously part of the UI: **selecting a session no longer opens a PTY
+socket.** The xterm mounts when the terminal is what you are looking at.
+That is the honest reading of D8′ — the terminal is an escape hatch, and an
+escape hatch that opens itself on every selection is just the front door
+again — and it means a dashboard of twelve sessions holds one PTY stream
+rather than one per glance.
+
+Three things this found, none of which were about the notebook:
+
+- The escape hatch never worked. `/notebook.html` had linked to
+  `/?token=…#agent=<id>` since P0 and nothing on the dashboard side has ever
+  read that fragment, so every "open the terminal" button landed on an empty
+  dashboard. It reads exactly like a broken button, which is presumably why
+  nobody used it enough to report it.
+- The image drop zone was the xterm element, so it stopped accepting drops
+  the moment the terminal became one of two views. `style.css` had already
+  been written for the whole panel; the JS had picked the narrower target.
+- `Capabilities.TranscriptContent` — the flag that decides whether a session
+  can have a document at all — was the one capability the `/api/cli`
+  marshaller did not put on the wire. Without it the session view could only
+  shrug at a session with no notebook, when the difference between "not yet"
+  and "never, and here is why" is the whole of D11.
+
+The markdown export (`GET /api/nb/<id>/export`) is the other half of "a
+session becomes a durable artifact". Structure rides in HTML comments, which
+GitHub strips when it renders and which make the document readable *back* —
+the round-trip test is the only way to know an export did not quietly lose a
+cell, and it fails silently otherwise. What markdown cannot represent —
+a tool call's argument tree, an approval, thirty context injections — is
+summarised in one line that says so, rather than faked. D11 applied to our
+own artifacts.
+
 ---
 
 ## 6. Consequences
@@ -419,22 +466,49 @@ anywhere saying why. Every adapter now scrubs the parent's session identity.
 1. **One notebook per session, or one per agent across sessions?** Proposed:
    per session, with the notebook outliving the process (a session ends; its
    document stays).
-2. **Does an authored markdown cell interleaved into a live session go into
-   the agent's context?** It cannot — the CLI owns context. Proposed: it is a
-   margin note, and the UI must make that obvious.
+2. ~~**Does an authored markdown cell interleaved into a live session go into
+   the agent's context?**~~ **Answered by M7, in the UI rather than in
+   prose.** It cannot — the CLI owns context, and there is no wire on which
+   to widen it. So the live notebook's buttons say where their text goes:
+   "+ Ask the agent" against "+ Note", with one line under them reading
+   *notes stay here; only prompts reach the agent*. Said at the point of
+   choosing, because that is the only moment the answer is wanted, and a
+   margin note the agent never read is a bad thing to discover later.
 3. **Does resuming a session (`--resume`) reopen its notebook or start a new
-   one?** Proposed: reopen, appending; the log already supports it.
+   one?** Proposed: reopen, appending; the log already supports it. Still
+   open and still cheap, because collectif does not spawn `--resume` at all
+   today — nothing can exercise the answer, so nothing has forced it.
 4. ~~**What happens to a mirrored cell when the transcript is rewritten**
    (compaction)?~~ **Answered by P0.** Claude Code appends a summary line and
    never rewrites, so no marker is needed — the summary is projected as its own
    part kind and rendered in place.
-5. **Should detached notebooks and session notebooks live in the same list?**
-   The sidebar currently shows both under separate headings, which is a UI
-   answer to an unanswered modelling question.
+5. ~~**Should detached notebooks and session notebooks live in the same
+   list?**~~ **Answered by M7: no, and the question dissolved rather than
+   being decided.** A session notebook does not need a list, because it is
+   not something you go and find — it is what a session *looks like*, and
+   you reach it by selecting the session. The dashboard's sidebar is the
+   only list of sessions there has ever been, and it now opens documents.
+   `/notebook.html` keeps its two headings for the case the dashboard has no
+   answer for: a detached notebook with no session behind it, which is a
+   different kind of object and belongs in a list of documents. Two lists
+   were the wrong answer to a real question; one list plus one view is the
+   shape the objects already had.
 6. **What settles the last turn of a session that is still running?** Today a
    turn is closed by the next prompt or by the session ending, so the live
    cell shows `running` for as long as the agent is idle at a prompt. Hooks
-   (`Stop`) would close it precisely; P1 territory.
+   (`Stop`) would close it precisely. **Deliberately not taken in M7**: it is
+   a change to the projector, not to the view, and the only test that would
+   convince anyone is a live session going idle — which is the class of
+   thing P0 exists to have taught us not to write from documentation. The
+   embedding made it more visible, not more urgent.
 7. **Do abandoned branches belong in the document at all?** They are currently
    shown as interrupted cells. Hiding them would read better and record less;
    the log keeps them either way.
+8. ~~**Retention: what stops the notebooks directory growing forever?**~~
+   **Answered by M7: nothing does, and it says so.** A notebook is written
+   for every session that can be projected, nothing deletes them, and
+   nothing should silently — the document outliving the process is the
+   point (question 1). What was missing was anyone being told: `listNotebooks`
+   now reports each notebook's bytes on disk, log plus snapshot, and the
+   notebook page's header carries the total. Deleting stays a decision
+   someone makes, with the number in front of them.

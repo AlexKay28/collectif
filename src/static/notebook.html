@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>collectif</title>
+<!-- nb_cells.css first: it declares the --nb-* palette nb.css reads, and a
+     shell that loads before its own tokens paints the wrong colours for a
+     frame. -->
+<link rel="stylesheet" href="nb_cells.css">
 <link rel="stylesheet" href="nb.css">
 </head>
 <body>
@@ -13,8 +17,13 @@
     <h1>collectif</h1>
     <span class="stat"><b id="stat-agents">0</b> notebooks</span>
     <span class="stat"><b id="stat-running">0</b> sessions</span>
+    <!-- #56 open question 4. A notebook is written for every session that
+         ever ran and nothing deletes them; the least a harness can do is
+         say how much room they are taking before someone finds out the
+         other way. -->
+    <span class="stat" id="stat-disk-wrap" title="Total size of every notebook's log and snapshot. Nothing here is deleted automatically."><b id="stat-disk">0</b> on disk</span>
     <span class="sp"></span>
-    <a href="/" title="The original PTY dashboard, still the front door until M7">terminal dashboard →</a>
+    <a href="/" title="The dashboard: spawning sessions, the terminal, budgets. Still the front door (ADR 0002 D8′) — this page is the same documents on their own.">dashboard →</a>
   </header>
 
   <div id="nb-error" role="alert"></div>
@@ -37,6 +46,11 @@
         <span class="title" id="doc-title"></span>
         <span class="root" id="doc-root"></span>
         <span class="sp"></span>
+        <!-- #56. The record of what an agent did is wanted somewhere else
+             — a PR description, an issue — and markdown is the form every
+             one of those places reads. -->
+        <a id="doc-export" href="#" target="_blank" rel="noopener"
+           title="This document as markdown, for a PR description">export ↗</a>
         <span class="live" id="doc-live" style="display:none">
           <span class="dot"></span><span id="doc-live-text"></span>
           <button id="doc-term" type="button" title="Open the raw terminal">terminal</button>
@@ -132,7 +146,7 @@
 <script type="module">
 import { state, nbAPI, openNotebook, onChange, watchSessions, TOKEN } from "./nb.js";
 import { mountCells, showError } from "./nb_cells.js";
-import { escapeHTML } from "./nb_render.js";
+import { escapeHTML, fidelityHTML } from "./nb_render.js";
 
 const list = document.getElementById("nb-list");
 const sessList = document.getElementById("nb-sessions");
@@ -171,6 +185,15 @@ function renderSidebar() {
   );
 
   document.getElementById("stat-agents").textContent = agents.length;
+  const bytes = agents.reduce((n, a) => n + (a.bytes || 0), 0);
+  document.getElementById("stat-disk").textContent = fmtBytes(bytes);
+  document.getElementById("stat-disk-wrap").style.display = bytes ? "" : "none";
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
 }
 
 // The sidebar dot shows the most notable thing happening in that notebook,
@@ -247,39 +270,15 @@ function renderSessions() {
     sess.filter((a) => a.status === "running").length;
 }
 
-// What this notebook can actually show. Stated once, at the top, in terms
-// of what you can do rather than which capability flags are set — and only
-// when something is missing, because a banner that appears on every
-// notebook is a banner nobody reads.
+// What this notebook can actually show. Stated once, at the top, and only
+// when something is missing; the wording lives in nb_render.js because the
+// session view inside the dashboard draws the same block.
 const fidelityBar = document.getElementById("nb-fidelity");
 
 function renderFidelity(nb) {
-  const f = nb?.fidelity;
-  if (!f || (f.turns && f.approvals && f.send && f.subagents && f.usage && f.mcp)) {
-    fidelityBar.style.display = "none";
-    return;
-  }
-  const missing = [];
-  if (!f.turns) missing.push("its turns are not shown here — collectif cannot read <b>" +
-    escapeHTML(f.cli) + "</b>'s transcript format");
-  if (!f.approvals) missing.push("permission requests will not appear here");
-  if (!f.usage) missing.push("token counts are unavailable");
-  if (!f.subagents) missing.push("work it delegates to subagents will not be nested here");
-  // Phrased as what the reader will wrongly conclude rather than as a
-  // missing feature: the calls still appear, so the only visible symptom
-  // of this gap is a session that looks like it never left the machine.
-  if (!f.mcp && f.turns) missing.push("calls to your MCP servers are not marked as such — they will read as built-in tools");
-
-  const can = [];
-  if (f.send) can.push("send prompts");
-  if (f.turns) can.push("read its turns");
-  if (f.approvals) can.push("answer its questions");
-
-  fidelityBar.style.display = "";
-  fidelityBar.innerHTML =
-    `<div class="what"><b>Partial view of this ${escapeHTML(f.cli)} session.</b> ` +
-    missing.join("; ") + `.</div>` +
-    (can.length ? `<div class="can">You can still ${can.join(" and ")} — use the terminal for the rest.</div>` : "");
+  const html = fidelityHTML(nb?.fidelity);
+  fidelityBar.style.display = html ? "" : "none";
+  fidelityBar.innerHTML = html;
 }
 
 function shortPath(p) {
@@ -329,10 +328,16 @@ document.getElementById("doc-term").addEventListener("click", () => {
   if (sid) window.open(`/?token=${encodeURIComponent(TOKEN)}#agent=${sid}`, "_blank");
 });
 
+const docExport = document.getElementById("doc-export");
+
 onChange(() => {
   const nb = state.notebook;
   docTitle.textContent = nb?.title || "";
   docRoot.textContent = nb?.root ? shortPath(nb.root) : "";
+  docExport.style.display = state.id ? "" : "none";
+  if (state.id) {
+    docExport.href = `/api/nb/${encodeURIComponent(state.id)}/export?token=${encodeURIComponent(TOKEN)}`;
+  }
 
   renderFidelity(nb);
 
@@ -353,7 +358,10 @@ onChange(() => {
 });
 
 mountCells(document.getElementById("nb-cells"));
-refreshList().catch(showError);
+// The fragment names a notebook, so "open as page" from the dashboard's
+// session view lands on the document you were reading rather than on
+// whichever one happens to be most recent.
+refreshList(decodeURIComponent(location.hash.slice(1))).catch(showError);
 watchSessions();
 </script>
 </body>

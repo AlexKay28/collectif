@@ -7,6 +7,9 @@ function renderTermPanel(mountTerminal) {
     empty.style.display = "flex";
     head.style.display = "none";
     body.style.display = "none";
+    const nb = document.getElementById("nb-embed");
+    if (nb) nb.style.display = "none";
+    if (window.collectifSessionView) window.collectifSessionView.clear();
     teardownTerminal();
     updateTeamVisibility();
     return;
@@ -37,7 +40,23 @@ function renderTermPanel(mountTerminal) {
     resumeBtn.style.display = status === "paused_over_budget" ? "" : "none";
   }
 
-  if (mountTerminal) mountTerminalFor(a.id);
+  // #56 / ADR 0002 D8'. A session's default view is its notebook, so
+  // selecting one no longer implies opening a PTY socket: the xterm is
+  // mounted when the terminal is what you are looking at, and not before.
+  //
+  // sync() goes here rather than in selectAgent because this is the one
+  // function that already runs on every repaint, and a session's notebook
+  // slug appears seconds after the session does — the transcript has to be
+  // written first.
+  //
+  // Fails open. If nb_embed.js never loaded there is no switch to consult
+  // and no document to show, so the terminal mounts exactly as it did
+  // before this change.
+  const sessionView = window.collectifSessionView;
+  if (sessionView) sessionView.sync(a);
+  if (mountTerminal && (!sessionView || sessionView.current() === "terminal")) {
+    mountTerminalFor(a.id);
+  }
   requestAnimationFrame(() => { fitTerminalNow(); });
   updateTeamVisibility();
 }

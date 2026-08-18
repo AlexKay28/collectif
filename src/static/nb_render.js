@@ -111,6 +111,44 @@ export function renderMarkdown(src) {
   return out.join("\n");
 }
 
+// ─── Fidelity ─────────────────────────────────────────────────────────
+
+// What this notebook can actually show. Stated in terms of what you can
+// do rather than which capability flags are set, and returned empty when
+// nothing is missing — a banner that appears on every notebook is a banner
+// nobody reads, and this is the one that has to be read (ADR 0002 D11).
+//
+// It lives here rather than in a page because both hosts draw it: the
+// full-page notebook and the session view inside the dashboard. Two copies
+// of a claim about what collectif can see is exactly how one of them ends
+// up still promising a capability the other stopped having.
+export function fidelityHTML(f) {
+  if (!f || (f.turns && f.approvals && f.send && f.subagents && f.usage && f.mcp)) return "";
+
+  const missing = [];
+  if (!f.turns) missing.push("its turns are not shown here — collectif cannot read <b>" +
+    escapeHTML(f.cli) + "</b>'s transcript format");
+  if (!f.approvals) missing.push("permission requests will not appear here");
+  if (!f.usage) missing.push("token counts are unavailable");
+  if (!f.subagents) missing.push("work it delegates to subagents will not be nested here");
+  // Phrased as what the reader would otherwise wrongly conclude rather than
+  // as a missing feature: the calls still appear either way, so the only
+  // visible symptom of this gap is a session that looks like it never left
+  // the machine (#54).
+  if (!f.mcp && f.turns) {
+    missing.push("calls to your MCP servers are not marked as such — they will read as built-in tools");
+  }
+
+  const can = [];
+  if (f.send) can.push("send prompts");
+  if (f.turns) can.push("read its turns");
+  if (f.approvals) can.push("answer its questions");
+
+  return `<div class="what"><b>Partial view of this ${escapeHTML(f.cli)} session.</b> ` +
+    missing.join("; ") + `.</div>` +
+    (can.length ? `<div class="can">You can still ${can.join(" and ")} — use the terminal for the rest.</div>` : "");
+}
+
 // ─── Outputs ──────────────────────────────────────────────────────────
 
 // renderOutputs draws a cell's finalised outputs, or the live stream while

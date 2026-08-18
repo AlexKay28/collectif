@@ -106,6 +106,8 @@ func handleNotebookByID(w http.ResponseWriter, r *http.Request) {
 		handleNotebookRoot(w, r, st)
 	case subpath == "cells":
 		handleCellInsert(w, r, st)
+	case subpath == "export":
+		handleNotebookExport(w, r, st)
 	case strings.HasPrefix(subpath, "cells/"):
 		rest := strings.TrimPrefix(subpath, "cells/")
 		cellID, action := rest, ""

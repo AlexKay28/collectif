@@ -731,6 +731,12 @@ type notebookSummary struct {
 	Root      string    `json:"root"`
 	Cells     int       `json:"cells"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Bytes is what this notebook occupies on disk — its log plus its
+	// snapshot. Reported because a session notebook is written for every
+	// session that ever ran and nothing deletes them (#56): a directory
+	// that grows without bound is fine right up until nobody knew it was
+	// growing. Deleting is still the user's call, never ours.
+	Bytes int64 `json:"bytes"`
 }
 
 // peekNotebook reads a notebook's summary without opening it.
@@ -782,6 +788,12 @@ func listNotebooks() ([]notebookSummary, error) {
 		}
 		if info, err := e.Info(); err == nil {
 			s.UpdatedAt = info.ModTime().UTC()
+			s.Bytes = info.Size()
+		}
+		// The snapshot is a cache, but it is a cache the user is paying
+		// for, so it counts. A missing one is simply zero.
+		if info, err := os.Stat(filepath.Join(dir, slug+".snap.json")); err == nil {
+			s.Bytes += info.Size()
 		}
 		out = append(out, s)
 	}

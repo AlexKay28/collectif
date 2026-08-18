@@ -127,7 +127,11 @@ function fmtSize(b) {
 
 // Wire up paste, drag-drop, and picker to the currently selected session.
 function bootAttach() {
-  const dropZone = document.getElementById("term-panel-root") || document.getElementById("term-body");
+  // The whole session panel, not just the xterm inside it. Since #56 the
+  // terminal is one of two views and is display:none whenever the notebook
+  // is showing, so a drop zone scoped to it silently stopped accepting
+  // images for the default view. style.css already styled both.
+  const dropZone = document.querySelector(".term-panel") || document.getElementById("term-body");
 
   // Paste — anywhere in the app while an agent is selected.
   document.addEventListener("paste", async (ev) => {

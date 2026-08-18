@@ -12,6 +12,13 @@
 > **terminal**, not the CLI. Everything below about the document model,
 > context projection, the event log, and cache economics stands — the loop it
 > describes is now one of two backends rather than the only one.
+>
+> Concretely, as shipped: the dashboard is still the front door, selecting a
+> session there shows its notebook where the xterm panel used to be, and the
+> terminal is a tab beside it. Nothing went legacy and there is no flag to
+> bring anything back, because nothing was taken away. If you are reading
+> this document to find out how collectif works today, §4 (the document
+> model, projection, the log) is still accurate and §2 D1/D8 and §6 are not.
 
 ---
 
