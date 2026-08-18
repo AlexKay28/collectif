@@ -417,6 +417,26 @@ func sendPromptCell(st *notebookStore, cellID, source, sessionID string, run *nb
 		return
 	}
 
+	// #57. The gate above only refuses dialogs we can see. This checks
+	// whether the text actually reached the input box, which is the
+	// question the gate can only approximate — and answers it in seconds
+	// rather than leaving the adoption timeout to notice in twenty.
+	if s := getSession(sessionID); s != nil && !verifyPromptEcho(s, source) {
+		if p := sessionProjectorFor(sessionID); p != nil {
+			p.CancelAdoption(cellID)
+		}
+		st.Append(evOutputAppended, outputAppendedPayload{ //nolint:errcheck
+			CellID: cellID, RunID: run.runID,
+			Output: Output{
+				Type: OutputError,
+				Text: "This never appeared in the agent's input box, so it probably answered a dialog " +
+					"instead of being read as a prompt. Open the terminal to see what is on screen.",
+			},
+		})
+		st.finishRunWithUsage(cellID, run.runID, CellError, Usage{})
+		return
+	}
+
 	// No terminal event here on purpose. The turn is the CLI's now, and it
 	// ends when the transcript says it ends.
 	st.endRun(cellID, run.runID)

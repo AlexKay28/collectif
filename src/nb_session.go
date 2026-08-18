@@ -575,6 +575,17 @@ func (p *sessionProjector) giveUpOnAdoption(cellID string, gen uint64) {
 	})
 }
 
+// CancelAdoption drops a pending adoption without settling its cell — the
+// caller has already decided what the cell says (#57).
+func (p *sessionProjector) CancelAdoption(cellID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.adoptCell == cellID {
+		p.adoptCell, p.adoptText = "", ""
+		p.adoptGen++
+	}
+}
+
 // adopt attaches an incoming mirrored prompt to the cell the user already
 // authored, returning whether it did. One shot: a later identical prompt
 // is a new turn, not a second chance.
@@ -635,15 +646,36 @@ func checkSessionDrivable(sessionID string) error {
 	if s.pty() == nil {
 		return fmt.Errorf("session %s has no terminal attached yet", sessionID)
 	}
+	// A CLI showing a dialog reads whatever arrives as an answer to it.
+	// Sending a prompt now is not merely useless — a prompt beginning with
+	// "1" would select the first option of a permission request.
 	if s.hasPending() {
-		// A CLI showing a dialog reads whatever arrives as an answer to it.
-		// Sending a prompt now is not merely useless — a prompt beginning
-		// with "1" would select the first option of a permission request.
-		// This gate is only as good as menu.go's detection, which is why
-		// the send also has a delivery timeout.
 		return errAgentWaiting
 	}
+	// #57. The menu detector has been reporting numbered dialogs on every
+	// tick since long before the notebook existed, and nothing read it.
+	// This is the auto-mode dialog that swallowed two live prompts: it
+	// fires no hook, so Pending stays empty, but it was on screen and
+	// detected the whole time.
+	if opts := s.getMenuOptions(); len(opts) > 0 {
+		return fmt.Errorf("%w — it is showing: %s", errAgentWaiting, menuSummary(opts))
+	}
 	return nil
+}
+
+// menuSummary names what is on screen. A refusal that does not say what is
+// in the way is indistinguishable from the agent simply being busy, and
+// leaves the reader with nothing to do about it.
+func menuSummary(opts []MenuOption) string {
+	labels := make([]string, 0, len(opts))
+	for i, o := range opts {
+		if i == 3 {
+			labels = append(labels, "…")
+			break
+		}
+		labels = append(labels, o.Key+". "+o.Label)
+	}
+	return strings.Join(labels, " / ")
 }
 
 // errAgentWaiting is a distinct error because the HTTP layer answers it
