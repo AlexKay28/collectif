@@ -68,6 +68,12 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 	// loop appends below are new every time.
 	stablePrefix := len(msgs)
 
+	// The permission rules are resolved once, here, and not re-read
+	// per call: a run must not change its mind halfway through because
+	// somebody saved the file, and two calls in one turn answered under
+	// different policies would make the audit record unreadable (#52).
+	gate := newPolicyGate(st, doc, cellID, run.runID)
+
 	// Resolve the model's budgets once. ADR §4.4 names three, doing three
 	// different jobs: max_tokens is a hard per-response cap the model
 	// cannot see, the notebook's dollar cap is ours and is checked between
@@ -168,17 +174,35 @@ func runPromptCell(ctx context.Context, st *notebookStore, cellID string, run *n
 		msgs = append(msgs, Message{Role: RoleAssistant, Content: res.Content})
 		results := make([]ContentBlock, 0, len(calls))
 		for _, call := range calls {
-			text, isErr := dispatchTool(ctx, call, doc.Root)
+			out := dispatchTool(ctx, gate, call, doc.Root, &deltaWriter{st: st, cellID: cellID, runID: run.runID})
+			// The diff goes in first: it is what changed, and the result
+			// line below is only the confirmation. ADR 0001 §4.1 built the
+			// renderer for this output type in M1 and nothing produced one
+			// until the write tools landed.
+			if out.Diff != "" {
+				st.emitOutput(cellID, run.runID, Output{
+					Type: OutputDiff,
+					Text: out.Diff,
+					Data: map[string]any{"tool": call.Name},
+				})
+			}
+			data := map[string]any{"tool": call.Name, "isError": out.IsError}
+			if out.Policy.Verdict != "" {
+				data["policy"] = string(out.Policy.Verdict)
+			}
+			if out.Policy.Rule != "" {
+				data["policyRule"] = out.Policy.Rule
+			}
 			st.emitOutput(cellID, run.runID, Output{
 				Type: OutputToolResult,
-				Text: text,
-				Data: map[string]any{"tool": call.Name, "isError": isErr},
+				Text: out.Text,
+				Data: data,
 			})
 			results = append(results, ContentBlock{
 				Type:      BlockToolResult,
 				ToolUseID: call.ID,
-				Text:      text,
-				IsError:   isErr,
+				Text:      out.Text,
+				IsError:   out.IsError,
 			})
 		}
 		msgs = append(msgs, Message{Role: RoleUser, Content: results})
@@ -274,19 +298,78 @@ func recordTurn(st *notebookStore, cellID, runID string, res Result) []ToolCall 
 	return calls
 }
 
+// toolOutcome is everything one dispatched call produced: what the model is
+// told, whether that is an error it should react to, which policy decision
+// let it happen, and what it changed on disk.
+type toolOutcome struct {
+	Text    string
+	IsError bool
+	Policy  policyDecision
+	Diff    string
+}
+
 // dispatchTool runs one call. Every failure path returns text plus an error
 // flag rather than an error: the model is the one who has to react.
-func dispatchTool(ctx context.Context, call ToolCall, root string) (string, bool) {
+//
+// The order here is the security property of the whole phase, so it is
+// worth stating flatly. Containment is inside the tool and runs first,
+// against the path, unconditionally. Policy runs second and can only decide
+// whether the call happens at all. There is no ordering in which a rule
+// gets consulted about *where* — see policy.go's header.
+//
+// The gate is required, and a missing one refuses rather than proceeding.
+// Failing open would mean a caller that forgot to pass one ran every tool
+// unpoliced with nothing anywhere saying so — the class of silent failure
+// this package spends most of its comments on.
+func dispatchTool(ctx context.Context, gate *policyGate, call ToolCall, root string, sink io.Writer) toolOutcome {
+	if gate == nil {
+		return toolOutcome{
+			Text:    "This run has no permission gate, so no tool can be run. This is a bug in collectif.",
+			IsError: true,
+		}
+	}
 	tool := lookupTool(call.Name)
 	if tool == nil {
-		return fmt.Sprintf("No tool named %q is available. Available tools: %s.",
-			call.Name, strings.Join(toolNames(), ", ")), true
+		return toolOutcome{Text: fmt.Sprintf("No tool named %q is available. Available tools: %s.",
+			call.Name, strings.Join(toolNames(), ", ")), IsError: true}
 	}
-	out, isErr, err := tool.Run(ctx, call.Input, root)
+
+	// The preview is computed before the decision because the decision may
+	// need to show it. A tool that cannot describe itself returns "" and
+	// the question is asked without a diff rather than not asked.
+	var preview string
+	if p, ok := tool.(previewer); ok {
+		preview = p.Preview(call.Input, root)
+	}
+
+	decision, refusal := gate.check(ctx, call, preview)
+	if refusal != "" {
+		return toolOutcome{Text: refusal, IsError: true, Policy: decision}
+	}
+
+	out, isErr, err := runTheTool(ctx, tool, call, root, sink)
 	if err != nil {
-		return fmt.Sprintf("Tool %s failed: %v", call.Name, err), true
+		return toolOutcome{Text: fmt.Sprintf("Tool %s failed: %v", call.Name, err), IsError: true, Policy: decision}
 	}
-	return out, isErr
+	res := toolOutcome{Text: out, IsError: isErr, Policy: decision}
+	if !isErr {
+		// The diff is the preview, not a re-read: the file is on disk by
+		// now and re-diffing it would describe the state of the world
+		// rather than this call's contribution to it. They differ if
+		// something else wrote in between, and in that case what this call
+		// did is still what this call did.
+		res.Diff = preview
+	}
+	return res
+}
+
+// runTheTool prefers the streaming entry point where a tool has one, so a
+// long command fills the cell while it runs instead of after.
+func runTheTool(ctx context.Context, tool Tool, call ToolCall, root string, sink io.Writer) (string, bool, error) {
+	if s, ok := tool.(streamingTool); ok && sink != nil {
+		return s.RunStream(ctx, call.Input, root, sink)
+	}
+	return tool.Run(ctx, call.Input, root)
 }
 
 func toolNames() []string {

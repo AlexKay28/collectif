@@ -29,6 +29,11 @@ type nbFixture struct {
 func newNBFixture(t *testing.T) *nbFixture {
 	t.Helper()
 	withTempNotebooks(t)
+	// The permission engine reads ~/.config/collectif/permissions.json and
+	// the "always allow" answer appends to it (#52). A test must never read
+	// the developer's real rules — the suite would then pass or fail
+	// differently on every machine — and must certainly never write them.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	st, err := createNotebook("Runner", root)
 	if err != nil {

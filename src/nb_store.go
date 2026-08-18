@@ -98,6 +98,14 @@ type notebookStore struct {
 	// the finalised output reaches the log, which is then the record.
 	liveMu  sync.Mutex
 	liveOut map[string]*liveOutput
+
+	// approvalsMu guards approvals ONLY — the permission questions this
+	// notebook's runs are currently blocked on, keyed by approval id (#52).
+	// Independent of every other lock here for the same reason runsMu is: a
+	// human takes minutes to answer one, and holding anything else for that
+	// long would stall appends and broadcasts behind a coffee break.
+	approvalsMu sync.Mutex
+	approvals   map[string]*pendingApproval
 }
 
 // liveOutput is the un-persisted, in-progress output of one run.

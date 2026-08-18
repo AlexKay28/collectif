@@ -215,6 +215,10 @@ func TestRunPromptCell_ToolCallRoundTrip(t *testing.T) {
 	f := newNBFixture(t)
 	tool := &fakeTool{name: "peek", result: "tool says hello"}
 	withTools(t, tool)
+	// A tool nothing has a rule for defaults to ask (#52), which is the
+	// right default and the wrong thing to leave implicit in a test about
+	// the loop: without this the run blocks on a question no test answers.
+	withTempPolicy(t, policyRules{Allow: []string{"peek(**)"}})
 	fp := &fakeProvider{turns: []scriptedTurn{
 		{toolName: "peek", toolInput: map[string]any{"path": "x"}},
 		{text: "I used the tool"},
@@ -306,6 +310,7 @@ func TestRunPromptCell_StopsAtTheTurnCap(t *testing.T) {
 	f := newNBFixture(t)
 	tool := &fakeTool{name: "loop", result: "again"}
 	withTools(t, tool)
+	withTempPolicy(t, policyRules{Allow: []string{"loop(**)"}})
 
 	turns := make([]scriptedTurn, maxAgentTurns+5)
 	for i := range turns {

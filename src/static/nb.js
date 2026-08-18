@@ -94,8 +94,11 @@ export const nbAPI = {
     api("POST", `/api/nb/${id}/cells/${cid}/move`, { beforeCellId }),
   runCell: (id, cid) => api("POST", `/api/nb/${id}/cells/${cid}/run`),
   interruptCell: (id, cid) => api("POST", `/api/nb/${id}/cells/${cid}/interrupt`),
-  answerApproval: (id, cid, answer) =>
-    api("POST", `/api/nb/${id}/cells/${cid}/approve`, { answer }),
+  // approvalId is what pairs the answer with the question a run is blocked
+  // on. The session path ignores it — a CLI has at most one prompt up — but
+  // a detached notebook's permission engine keys its waiters by it.
+  answerApproval: (id, cid, answer, approvalId) =>
+    api("POST", `/api/nb/${id}/cells/${cid}/approve`, { answer, approvalId }),
 };
 
 // ─── Fold ─────────────────────────────────────────────────────────────

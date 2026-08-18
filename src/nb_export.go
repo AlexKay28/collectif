@@ -405,6 +405,8 @@ func oneLine(s string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
 }
 
+// plural is shared across the package. #52 and #56 were built in parallel
+// worktrees and each wrote an identical copy; this is the survivor.
 func plural(n int) string {
 	if n == 1 {
 		return ""

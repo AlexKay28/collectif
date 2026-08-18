@@ -153,17 +153,23 @@ func handleCellApprove(w http.ResponseWriter, r *http.Request, st *notebookStore
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var req struct {
+		Answer     string `json:"answer"`
+		ApprovalID string `json:"approvalId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+
+	// Two backends, two kinds of question, one widget (ADR 0002 D10). A
+	// mirrored session's questions come from the CLI and are answered with
+	// keystrokes; a detached notebook's come from our own permission engine
+	// and are answered by unblocking the run. Which one this is is decided
+	// by the same field that decides which backend runs the cell.
 	doc := st.Doc()
 	sessionID := doc.Meta.SessionID
 	if sessionID == "" {
-		http.Error(w, "this notebook is not attached to a session — there is no agent to answer",
-			http.StatusBadRequest)
-		return
-	}
-	var req struct {
-		Answer string `json:"answer"`
-	}
-	if !decodeBody(w, r, &req) {
+		answerPolicyApproval(w, st, cellID, req.ApprovalID, req.Answer)
 		return
 	}
 
@@ -206,4 +212,67 @@ func handleCellApprove(w http.ResponseWriter, r *http.Request, st *notebookStore
 	recordApprovalResolution(s, resolution)
 
 	writeJSON(w, http.StatusOK, map[string]any{"cellId": cellID, "answer": resolution})
+}
+
+// ─── The detached notebook's own questions (#52) ────────────────────────
+
+// answerPolicyApproval unblocks a run waiting on the permission engine.
+//
+// It shares this endpoint with the session path above deliberately. The two
+// questions come from different places and are delivered differently, but
+// they are the same decision to the person answering, and a second endpoint
+// would have meant a second widget. What is different is the third answer:
+// a CLI prompt has approve and deny, and a policy ask also has "always",
+// which writes a rule.
+func answerPolicyApproval(w http.ResponseWriter, st *notebookStore, cellID, approvalID, answer string) {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "approve", "yes", "allow":
+		answer = "approve"
+	case "deny", "no", "reject":
+		answer = "deny"
+	case "always":
+		answer = "always"
+	default:
+		http.Error(w, fmt.Sprintf("unknown answer %q — expected approve, deny or always", answer),
+			http.StatusBadRequest)
+		return
+	}
+
+	var pa *pendingApproval
+	var ok bool
+	if approvalID != "" {
+		pa, ok = st.takeApproval(approvalID)
+	} else {
+		approvalID, pa, ok = st.takeApprovalForCell(cellID)
+	}
+	if !ok {
+		// A 409 rather than a 404, matching the session path: the question
+		// was real, it is simply no longer being asked. It may have expired,
+		// or the run may have been interrupted underneath it.
+		http.Error(w, "that permission request is no longer open — it may have expired, "+
+			"or the run may have been interrupted", http.StatusConflict)
+		return
+	}
+
+	if answer == "always" {
+		if pa.rule == "" {
+			st.openApproval(approvalID, pa) // put it back; the question stands
+			http.Error(w, "there is no pattern to always-allow for this call", http.StatusBadRequest)
+			return
+		}
+		// Written before the run is released, and a failure is reported
+		// rather than swallowed: a user who chose "always" and got "once"
+		// would find out the next time the same call was made, which is the
+		// worst possible moment.
+		if err := appendAllowRule(pa.rule); err != nil {
+			st.openApproval(approvalID, pa)
+			http.Error(w, "could not write the permission rule: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	pa.answer <- answer
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cellId": cellID, "approvalId": approvalID, "answer": answer, "rule": pa.rule,
+	})
 }

@@ -154,6 +154,19 @@ func handleNotebookRoot(w http.ResponseWriter, r *http.Request, st *notebookStor
 			http.Error(w, "nothing to update", http.StatusBadRequest)
 			return
 		}
+		// A rule that does not parse matches nothing, which is the safe
+		// direction for allow and the dangerous one for deny: a missing
+		// bracket in `deny bash(rm -rf *)` silently stops denying anything.
+		// Refused here because this is the last place with somewhere to put
+		// the error — once it is in the log it is a document the user reads
+		// as protection they do not have (#52).
+		if req.Meta != nil && req.Meta.Permissions != nil {
+			if bad := invalidRules(*req.Meta.Permissions); bad != "" {
+				http.Error(w, "permission rule "+bad+" is not of the form tool(pattern)",
+					http.StatusBadRequest)
+				return
+			}
+		}
 		if _, err := st.Append(evMetaSet, metaSetPayload{Title: req.Title, Meta: req.Meta}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
