@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -428,5 +429,145 @@ func TestProjector_InjectionsBeforeAnyTurnAreKept(t *testing.T) {
 	}
 	if cells[1].Source != "the first prompt" {
 		t.Errorf("the prompt landed wrong: %q", cells[1].Source)
+	}
+}
+
+// ─── Subagents (#55a) ───────────────────────────────────────────────────
+//
+// A delegating turn shows an Agent call and its result with nothing in
+// between. The child's work — often the majority of what happened — goes
+// in there, attached by the exact link the transcript gives us rather than
+// by guessing which turn was open.
+
+func TestProjector_SubagentWorkAttachesToTheTurnThatSpawnedIt(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{part(PartUserText, "review the diff", "l1")})
+	p.Ingest([]TranscriptPart{{Kind: PartToolCall, ToolName: "Agent", ToolUseID: "t1", UUID: "l2"}})
+	p.Ingest([]TranscriptPart{{
+		Kind: PartToolResult, ToolUseID: "t1", Text: "launched", UUID: "l3",
+		AgentID: "child1", AgentType: "code-reviewer",
+	}})
+
+	// The child's own conversation, read from its own file.
+	p.IngestSubagent("child1", []TranscriptPart{
+		{Kind: PartAssistantText, Text: "Reading the diff.", UUID: "c1", Sidechain: true},
+		{Kind: PartToolCall, ToolName: "Read", ToolUseID: "ct1", UUID: "c2", Sidechain: true},
+		{Kind: PartToolResult, ToolUseID: "ct1", Text: "package main", UUID: "c3", Sidechain: true},
+	})
+
+	cells := st.Doc().Cells
+	if len(cells) != 1 {
+		t.Fatalf("got %d cells, want 1 — a subagent is not a turn of its own: %+v", len(cells), cells)
+	}
+	var child []Output
+	for _, o := range cells[0].Outputs {
+		if (o.Data != nil) && o.Data["agentId"] == "child1" {
+			child = append(child, o)
+		}
+	}
+	if len(child) != 3 {
+		t.Fatalf("got %d child outputs, want 3: %+v", len(child), cells[0].Outputs)
+	}
+	// The child's work keeps its own shapes — a tool call is a tool call
+	// whoever made it — and is tagged so the renderer can nest it.
+	if child[0].Type != OutputText || child[1].Type != OutputToolCall {
+		t.Errorf("child output types = %q, %q", child[0].Type, child[1].Type)
+	}
+	if child[0].Data["agentType"] != "code-reviewer" {
+		t.Errorf("the child is unlabelled: %v", child[0].Data)
+	}
+}
+
+// The synchronous case: a child writes its whole transcript before the
+// parent's result names it, so the link arrives last. Nothing may be lost
+// waiting for it.
+func TestProjector_SubagentWorkSeenBeforeTheLinkIsNotLost(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{part(PartUserText, "delegate this", "l1")})
+	p.Ingest([]TranscriptPart{{Kind: PartToolCall, ToolName: "Agent", ToolUseID: "t1", UUID: "l2"}})
+
+	// Child lines arrive while the Agent call is still running.
+	p.IngestSubagent("child2", []TranscriptPart{
+		{Kind: PartAssistantText, Text: "working", UUID: "c1", Sidechain: true},
+	})
+	if got := len(st.Doc().Cells[0].Outputs); got != 1 {
+		t.Fatalf("an unlinked child was written to the document anyway (%d outputs)", got)
+	}
+
+	// Then the result names it.
+	p.Ingest([]TranscriptPart{{
+		Kind: PartToolResult, ToolUseID: "t1", Text: "done", UUID: "l3", AgentID: "child2",
+	}})
+
+	var child int
+	for _, o := range st.Doc().Cells[0].Outputs {
+		if o.Data != nil && o.Data["agentId"] == "child2" {
+			child++
+		}
+	}
+	if child != 1 {
+		t.Errorf("the child's work was lost while waiting for its link: %d outputs", child)
+	}
+}
+
+// Held work cannot accumulate forever. A child that is never claimed by
+// any result would otherwise be a slow leak on a long session.
+func TestProjector_UnclaimedSubagentWorkIsBounded(t *testing.T) {
+	_, p := newProjectorFixture(t)
+
+	for i := 0; i < maxHeldSubagentParts+40; i++ {
+		p.IngestSubagent("ghost", []TranscriptPart{
+			{Kind: PartAssistantText, Text: "orphan", UUID: fmt.Sprintf("g%d", i), Sidechain: true},
+		})
+	}
+	p.mu.Lock()
+	held := len(p.heldSubagent["ghost"])
+	p.mu.Unlock()
+	if held > maxHeldSubagentParts {
+		t.Errorf("held %d parts for a child nothing ever claimed, cap is %d", held, maxHeldSubagentParts)
+	}
+}
+
+// Re-reading a child's file must not double its turns, exactly as for the
+// parent transcript.
+func TestProjector_SubagentIngestIsIdempotent(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{part(PartUserText, "go", "l1")})
+	p.Ingest([]TranscriptPart{{Kind: PartToolResult, ToolUseID: "t1", UUID: "l2", AgentID: "child3"}})
+
+	work := []TranscriptPart{{Kind: PartAssistantText, Text: "once", UUID: "c1", Sidechain: true}}
+	p.IngestSubagent("child3", work)
+	before := st.Doc().Version
+	p.IngestSubagent("child3", work)
+	p.IngestSubagent("child3", work)
+
+	if after := st.Doc().Version; after != before {
+		t.Errorf("re-ingesting a child appended %d events", after-before)
+	}
+}
+
+// Two children of one turn stay distinguishable — a parent routinely fans
+// out, and merging them would read as one very confused agent.
+func TestProjector_SiblingSubagentsStaySeparate(t *testing.T) {
+	st, p := newProjectorFixture(t)
+
+	p.Ingest([]TranscriptPart{part(PartUserText, "fan out", "l1")})
+	p.Ingest([]TranscriptPart{{Kind: PartToolResult, ToolUseID: "t1", UUID: "l2", AgentID: "a", AgentType: "explorer"}})
+	p.Ingest([]TranscriptPart{{Kind: PartToolResult, ToolUseID: "t2", UUID: "l3", AgentID: "b", AgentType: "reviewer"}})
+
+	p.IngestSubagent("a", []TranscriptPart{{Kind: PartAssistantText, Text: "from a", UUID: "ca", Sidechain: true}})
+	p.IngestSubagent("b", []TranscriptPart{{Kind: PartAssistantText, Text: "from b", UUID: "cb", Sidechain: true}})
+
+	seen := map[string]string{}
+	for _, o := range st.Doc().Cells[0].Outputs {
+		if o.Data != nil && o.Data["agentId"] != nil {
+			seen[o.Data["agentId"].(string)] = o.Text
+		}
+	}
+	if seen["a"] != "from a" || seen["b"] != "from b" {
+		t.Errorf("siblings were merged or mislabelled: %v", seen)
 	}
 }

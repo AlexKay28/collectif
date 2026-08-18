@@ -156,8 +156,17 @@ thinking directly off the stream.
 **Subagents live in their own files.** `isSidechain` is never true in a main
 transcript; subagent conversations are written to
 `<session>/subagents/agent-*.jsonl`, where every line *is* flagged. The same
-parser reads them unchanged, so M6's input problem is already solved — it
-needs a file watcher and nesting, not a second parser.
+parser reads them unchanged.
+
+*Closed by #55a.* The remaining unknown was how to attach a child to the turn
+that spawned it, and the format answers it exactly: the parent's `tool_result`
+carries `toolUseResult.agentId`, which is the child file's name. 478
+delegations on this machine, 478 transcripts located, none missing — so
+nothing guesses. The ordering runs both ways and neither is the exception: a
+background launch reports its child immediately and the work arrives over the
+following minutes, while a synchronous call writes the child's whole
+transcript before naming it, so work that arrives before its link is held and
+released when the link lands.
 
 **A transcript is a tree, not a list.** Every line names its `parentUuid`,
 and two user turns sharing a parent means the first was abandoned and
@@ -230,7 +239,7 @@ now about what a projected session can do, not about growing a competing agent.
 | M3 write tools + policy (#52) | for our loop | for the **detached** loop; session approvals come from hooks instead. Its stated purpose — "the first phase where collectif can damage something" — is already false: P1 slice B made it possible to approve a CLI's `rm -rf` from a browser tab |
 | M4 provider-agnostic (#53) | core bet | detached-notebook feature; low priority — a CLI has already chosen its provider |
 | M5 MCP (#54) | core | ~~unchanged~~ **detached-notebook feature, low priority.** Corrected 2026-08-17: every CLI collectif spawns already speaks MCP, so a client of our own serves only the smaller surface. Spike surfacing the CLI's `mcp__*` tool calls from hooks first — a fraction of the work, on the surface that has users |
-| M6 subagents (#55) | our `task` tool | **splits.** 55a projects the CLI's own subagents and is the highest-value work left; the parser already reads `subagents/agent-*.jsonl` unchanged, so what is missing is a watcher and a correlation, not a parser. 55b is our `task` tool, deferred |
+| M6 subagents (#55) | our `task` tool | **55a done.** The correlation turned out to be exact rather than inferred — the parent's tool result carries `toolUseResult.agentId`, which names the child's file. Verified against every delegation on this machine: 478 reported, 478 located, none missing. A directory follower reads the children and nests their work into the turn that spawned it. 55b (our own `task` tool) remains deferred |
 | M7 default surface (#56) | notebook replaces dashboard | **reversed.** The notebook replaces the terminal *panel*; the dashboard stays the front door. Half its scope already shipped — `cliExecutor` as P1's send path, the degraded badge as P2's fidelity block |
 
 P0 before P1 because a read-only projection is falsifiable in an afternoon and

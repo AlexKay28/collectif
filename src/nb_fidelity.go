@@ -46,6 +46,12 @@ type NotebookFidelity struct {
 	// Usage is whether token counts and cost are read from the CLI's own
 	// transcript rather than guessed.
 	Usage bool `json:"usage"`
+
+	// Subagents is whether delegated work is nested into the turn that
+	// spawned it (#55a). Without it an agent that delegated heavily reads
+	// as one that did nothing between its tool call and its result, which
+	// is a far more misleading absence than a missing token count.
+	Subagents bool `json:"subagents"`
 }
 
 // fidelityOf maps an adapter's capabilities onto the surfaces a person
@@ -56,12 +62,16 @@ func fidelityOf(a CLIAdapter) NotebookFidelity {
 		return NotebookFidelity{Send: true}
 	}
 	caps := a.Capabilities()
+	_, locates := a.(subagentLocator)
 	return NotebookFidelity{
 		CLI:       a.Name(),
 		Turns:     caps.TranscriptContent,
 		Approvals: caps.Hooks,
 		Send:      true,
 		Usage:     caps.StructuredTranscript,
+		// Both halves are required: knowing where the children are, and
+		// being able to read them once found.
+		Subagents: caps.SubagentFiles && caps.TranscriptContent && locates,
 	}
 }
 

@@ -75,6 +75,11 @@ func startTranscriptWatcher(ctx context.Context, s *Session) {
 		projector := openSessionProjector(s)
 		if projector != nil {
 			defer projector.Close()
+			// The children live beside the parent transcript, so the
+			// follower starts once we know that path (#55a). A session
+			// that never delegates costs one directory stat per tick.
+			stopSubagents := startSubagentWatch(s, projector, path)
+			defer stopSubagents()
 		}
 
 		var partial []byte

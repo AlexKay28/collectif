@@ -206,3 +206,67 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// #55a — the correlation, checked against real files rather than my
+// reading of them. For every agentId a transcript reports, the child
+// transcript the adapter points at has to actually be there.
+func TestProjectClaude_EveryReportedSubagentHasAFileWhereWeLookForIt(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	transcripts, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "*.jsonl"))
+	if len(transcripts) == 0 {
+		t.Skip("no Claude Code transcripts on this machine")
+	}
+
+	a := &claudeAdapter{}
+	var reported, located, missing int
+	var firstMissing string
+	for _, tp := range transcripts {
+		f, err := os.Open(tp)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
+		for sc.Scan() {
+			parts, err := a.ProjectTranscriptLine(sc.Bytes())
+			if err != nil {
+				t.Fatalf("%s: %v", filepath.Base(tp), err)
+			}
+			for _, p := range parts {
+				if p.AgentID == "" {
+					continue
+				}
+				reported++
+				path, ok := a.SubagentTranscriptPath(tp, p.AgentID)
+				if !ok {
+					t.Errorf("agent id %q from %s produced no path", p.AgentID, filepath.Base(tp))
+					continue
+				}
+				if _, err := os.Stat(path); err == nil {
+					located++
+				} else {
+					missing++
+					if firstMissing == "" {
+						firstMissing = path
+					}
+				}
+			}
+		}
+		f.Close()
+	}
+	t.Logf("%d subagents reported, %d transcripts located, %d missing", reported, located, missing)
+
+	if reported == 0 {
+		t.Skip("no subagents in any transcript here")
+	}
+	// Some will legitimately be absent — a child that never wrote a line,
+	// or a session whose files were cleaned up. A majority missing would
+	// mean the path convention is wrong.
+	if located*2 < reported {
+		t.Errorf("only %d of %d subagent transcripts were found (first miss: %s) — the path convention is wrong",
+			located, reported, firstMissing)
+	}
+}

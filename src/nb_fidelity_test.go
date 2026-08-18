@@ -221,3 +221,20 @@ func TestProjectingSend_StillWaitsForItsReflection(t *testing.T) {
 		t.Errorf("state = %q — a projectable CLI's prompt settled before its turn came back", got)
 	}
 }
+
+// #55a — a session that cannot show delegated work must say so, or an
+// agent that delegated heavily reads as one that did nothing between its
+// tool call and its result.
+func TestFidelity_SubagentsAreASurfaceOfTheirOwn(t *testing.T) {
+	if !fidelityOf(adapters["claude"]).Subagents {
+		t.Error("claude cannot show subagents, but its children have their own transcripts and we read them")
+	}
+	for _, name := range []string{"codex", "opencode"} {
+		if fidelityOf(adapters[name]).Subagents {
+			t.Errorf("%s claims it can show subagents — no convention is known for it", name)
+		}
+	}
+	if fidelityOf(nil).Subagents {
+		t.Error("an unknown adapter claims subagent projection")
+	}
+}
