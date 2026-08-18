@@ -537,7 +537,32 @@ html, body {
   display: block; color: var(--nb-muted); font-size: 11.5px; margin-top: 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.out.approval .acts { display: flex; gap: 7px; }
+/* Which rule produced the question — or, on an answered one, which rule
+   the "always" answer wrote. A verdict without its rule is not an audit
+   trail. */
+.out.approval .rule,
+.out.approval .wrote {
+  display: inline-block; margin-top: 4px;
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  border: 1px solid var(--nb-rule-soft); border-radius: 3px; padding: 1px 5px;
+}
+/* The proposed diff, inside the question. This is the reason the decision
+   is better made here than in a terminal: "run write?" is not answerable,
+   and "run write, here is what it changes" is. Spans the block and scrolls
+   on its own so a wide diff cannot widen the page. */
+.out.approval .diff {
+  grid-column: 1 / -1; margin: 2px 0 0; max-height: 320px; overflow: auto;
+}
+/* Explicitly in the last column so it sits beside a question that has no
+   diff and below one that does, without either case needing its own class. */
+.out.approval .acts { display: flex; gap: 7px; grid-column: 3; }
+.out.approval .acts button.always {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.out.approval .acts button.always code {
+  font: inherit; color: var(--nb-muted);
+}
+.out.approval .acts button.always:hover code { color: inherit; }
 .out.approval .acts button {
   background: none; border: 1px solid var(--nb-rule); border-radius: 3px;
   color: var(--nb-dim); font: 11px var(--nb-mono); cursor: pointer; padding: 4px 11px;

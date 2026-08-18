@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os/exec"
@@ -237,21 +238,34 @@ func runShellCell(ctx context.Context, st *notebookStore, cellID, source, root s
 	defer run.cancel() // release the context regardless of how we exit
 
 	out := &deltaWriter{st: st, cellID: cellID, runID: run.runID}
+	status := execShell(ctx, out, source, root, run.wasInterrupted)
+	st.finishRun(cellID, run.runID, out.text(), status)
+}
 
+// execShell runs one command under nbShell, streaming combined output to w,
+// and reports how it ended.
+//
+// Factored out of runShellCell for the `bash` tool (#52) rather than copied:
+// the process-group start and the kill below are the only thing standing
+// between an interrupted cell and a backgrounded child that outlives the
+// notebook, and two copies of that would eventually be one copy that
+// remembered it and one that did not.
+//
+// interrupted may be nil. When it reports true the exit status is not
+// written into the output, because a command someone stopped did not fail.
+func execShell(ctx context.Context, w io.Writer, source, root string, interrupted func() bool) CellState {
 	cmd := exec.Command(nbShell[0], append(nbShell[1:], source)...)
 	cmd.Dir = root
-	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stdout = w
+	cmd.Stderr = w
 	// Own process group, so a kill reaches the whole tree. A shell cell
 	// that backgrounds work would otherwise leave it running after an
 	// interrupt — the same reason main.go kills session process groups.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	status := CellOK
 	if err := cmd.Start(); err != nil {
-		out.write("collectif: " + err.Error() + "\n")
-		st.finishRun(cellID, run.runID, out.text(), CellError)
-		return
+		io.WriteString(w, "collectif: "+err.Error()+"\n") //nolint:errcheck
+		return CellError
 	}
 
 	done := make(chan struct{})
@@ -259,7 +273,7 @@ func runShellCell(ctx context.Context, st *notebookStore, cellID, source, root s
 		select {
 		case <-done:
 			// Finished normally. Check done first and return without
-			// looking at ctx: runShellCell cancels the context on the way
+			// looking at ctx: the caller cancels the context on the way
 			// out, so both cases are ready at once on the happy path and a
 			// random pick would kill a pid Wait() has already reaped —
 			// which, once pids recycle, is someone else's process group.
@@ -278,18 +292,18 @@ func runShellCell(ctx context.Context, st *notebookStore, cellID, source, root s
 	close(done)
 
 	switch {
-	case run.wasInterrupted():
-		status = CellInterrupted
+	case interrupted != nil && interrupted():
+		return CellInterrupted
 	case waitErr != nil:
-		status = CellError
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
-			out.write(fmt.Sprintf("\ncollectif: exited with status %d\n", exitErr.ExitCode()))
+			fmt.Fprintf(w, "\ncollectif: exited with status %d\n", exitErr.ExitCode()) //nolint:errcheck
 		} else {
-			out.write("\ncollectif: " + waitErr.Error() + "\n")
+			io.WriteString(w, "\ncollectif: "+waitErr.Error()+"\n") //nolint:errcheck
 		}
+		return CellError
 	}
-	st.finishRun(cellID, run.runID, out.text(), status)
+	return CellOK
 }
 
 func killProcessGroup(cmd *exec.Cmd) {

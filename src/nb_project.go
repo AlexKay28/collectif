@@ -223,11 +223,7 @@ func containedPath(root, rel string) (string, error) {
 		target = filepath.Join(rootAbs, rel)
 	}
 	target = filepath.Clean(target)
-	// Resolve symlinks on whatever part of the path already exists, so a
-	// link planted mid-path cannot escape.
-	if resolved, err := filepath.EvalSymlinks(target); err == nil {
-		target = resolved
-	}
+	target = resolveDeepestExisting(target)
 	relToRoot, err := filepath.Rel(rootAbs, target)
 	if err != nil {
 		return "", fmt.Errorf("path %q is outside the notebook root", rel)
@@ -236,4 +232,34 @@ func containedPath(root, rel string) (string, error) {
 		return "", fmt.Errorf("path %q is outside the notebook root", rel)
 	}
 	return target, nil
+}
+
+// resolveDeepestExisting resolves the symlinks on the longest prefix of p
+// that exists, and re-attaches the components that do not exist yet.
+//
+// The obvious version — EvalSymlinks(p), keep the old value on error — was
+// what this used to be, and it was a containment hole rather than a
+// fallback. EvalSymlinks is all-or-nothing: it fails on any path whose last
+// component is missing, so for `root/link/newfile` it returned an error and
+// the caller kept the *lexical* path, which is inside the root by
+// inspection and outside it in fact. Every path a write tool is given names
+// a file that does not exist yet, so the read tools' containment check did
+// not transfer to them at all (#52).
+func resolveDeepestExisting(p string) string {
+	var missing string
+	for probe := p; ; {
+		if resolved, err := filepath.EvalSymlinks(probe); err == nil {
+			return filepath.Join(resolved, missing)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			// Walked to the filesystem root without finding anything that
+			// exists. Nothing can be resolved, so the lexical path is all
+			// there is — and it cannot be hiding a link, because there is
+			// no link on it to hide.
+			return p
+		}
+		missing = filepath.Join(filepath.Base(probe), missing)
+		probe = parent
+	}
 }

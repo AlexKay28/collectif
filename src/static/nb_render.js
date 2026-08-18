@@ -128,9 +128,16 @@ export function renderOutputs(cell, liveText) {
   // thing, so the pair is folded here rather than in the log — the log
   // keeps both, because "asked at T1, denied at T2" is the audit trail.
   const verdicts = new Map();
+  const asked = new Set();
   for (const o of outs) {
     const d = o.data || {};
-    if (o.type === "approval" && d.resolution) verdicts.set(d.approvalId, d.resolution);
+    if (o.type !== "approval") continue;
+    if (d.resolution) verdicts.set(d.approvalId, d.resolution);
+    // A question the permission engine answered itself (#52) is one
+    // record, already resolved — nobody was asked, so a question followed
+    // by an answer would be theatre. Tracking which ids were actually
+    // *asked* is what keeps those from being folded away into nothing.
+    else asked.add(d.approvalId);
   }
   // Consecutive injections collapse into one disclosure. A turn can carry
   // thirty of them, and thirty separate lines would be worse than hiding
@@ -169,8 +176,8 @@ export function renderOutputs(cell, liveText) {
     flush();
     if (o.type === "approval") {
       const d = o.data || {};
-      if (d.resolution) continue; // folded into its question above
-      parts.push(renderApproval(o, verdicts.get(d.approvalId)));
+      if (d.resolution && asked.has(d.approvalId)) continue; // folded into its question above
+      parts.push(renderApproval(o, verdicts.get(d.approvalId) || d.resolution));
       continue;
     }
     parts.push(renderOutput(o));
@@ -234,28 +241,63 @@ function fmtBytes(n) {
 // else here is a record; this is a question, and until it is answered the
 // agent is stopped — including for any prompt you try to send, which will
 // otherwise be read as the answer.
+//
+// One widget, two sources (#52). A running CLI's permission prompt arrives
+// through a hook; a detached notebook's arrives from our own permission
+// engine. They are the same decision to the person answering, so they get
+// the same block. What the second one adds is the proposed diff — the
+// reason this decision is better made in a document than in a terminal —
+// and a third answer that writes a rule.
 function renderApproval(o, verdict) {
   const d = o.data || {};
   const id = escapeHTML(String(d.approvalId || ""));
   const tool = d.tool ? `<span class="tool">${escapeHTML(String(d.tool))}</span>` : "";
   const args = toolArgs(d.input);
+  const rule = d.rule ? `<span class="rule">${escapeHTML(String(d.rule))}</span>` : "";
 
   if (verdict) {
-    const label = { approved: "approved", denied: "denied", expired: "expired, unanswered" }[verdict] || verdict;
+    const label = {
+      approved: "approved",
+      denied: "denied",
+      expired: "expired, unanswered",
+      interrupted: "run interrupted, unanswered",
+    }[verdict] || verdict;
+    // A rule the "always" answer wrote is named on the record, because a
+    // decision that changed the rules for next time is a different event
+    // from one that did not.
+    const wrote = d.always && d.rule
+      ? `<span class="wrote">wrote ${escapeHTML(String(d.rule))}</span>` : "";
     return `<div class="out approval done ${escapeHTML(verdict)}">
               <span class="mark"></span>
               <div class="q">${tool}${escapeHTML(o.text || "")}
-                ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}</div>
+                ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}
+                ${d.always ? wrote : rule}</div>
               <span class="verdict">${escapeHTML(label)}</span>
             </div>`;
   }
+
+  // The diff is what makes this answerable rather than a leap of faith:
+  // "run write?" is not a question anyone can answer well, and "run write,
+  // here are the eleven lines it changes" is.
+  const diff = d.diff ? renderDiff(String(d.diff)) : "";
+  const always = d.alwaysRule
+    ? `<button data-answer="always" data-approval-id="${id}" class="always"
+               title="Appends this rule to your permissions file">Always allow
+         <code>${escapeHTML(String(d.alwaysRule))}</code></button>`
+    : "";
+
   return `<div class="out approval open" data-approval="${id}">
             <span class="mark"></span>
             <div class="q">${tool}${escapeHTML(o.text || "")}
-              ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}</div>
+              ${args ? `<span class="args">${escapeHTML(args)}</span>` : ""}
+              ${rule}</div>
+            ${diff}
             <div class="acts">
               <button data-answer="deny" data-approval-id="${id}">Deny</button>
-              <button data-answer="approve" data-approval-id="${id}" class="ok">Approve</button>
+              ${always}
+              <button data-answer="approve" data-approval-id="${id}" class="ok">${
+                d.alwaysRule ? "Approve once" : "Approve"
+              }</button>
             </div>
           </div>`;
 }

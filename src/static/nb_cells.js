@@ -253,7 +253,7 @@ function wire() {
       const cell = b.closest("[data-cell]");
       b.disabled = true;
       try {
-        await nbAPI.answerApproval(state.id, cell.dataset.cell, b.dataset.answer);
+        await nbAPI.answerApproval(state.id, cell.dataset.cell, b.dataset.answer, b.dataset.approvalId);
       } catch (err) {
         b.disabled = false;
         // The agent may have timed out, or been answered from the

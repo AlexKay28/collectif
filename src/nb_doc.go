@@ -136,6 +136,17 @@ type NotebookMeta struct {
 	// was is a fact about this document.
 	CLI string `json:"cli,omitempty"`
 
+	// Permissions overrides the machine's permission rules for this
+	// notebook (#52, ADR 0001 §4.6). Its allow and ask lists are consulted
+	// ahead of the global ones; its deny list is added to theirs and can
+	// never subtract from them, because a notebook's meta is one PATCH away
+	// and a per-notebook rule that could delete a machine-wide deny would
+	// make the global file decorative.
+	//
+	// It cannot widen the notebook's root. Nothing can — containment is
+	// checked by the tools before policy is consulted at all.
+	Permissions *policyRules `json:"permissions,omitempty"`
+
 	// SessionID names the CLI session this notebook mirrors (ADR 0002).
 	// Empty means detached: the notebook is its own document and prompt
 	// cells run on collectif's provider (D10). Non-empty means the agent

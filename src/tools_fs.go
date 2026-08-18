@@ -1,10 +1,12 @@
 package main
 
-// tools_fs.go — the read-only built-in tools. #50 (M2 slice B).
+// tools_fs.go — the built-in filesystem tools. #50 (M2 slice B), extended
+// by #52 (M3) with the two that can change something.
 //
-// M2 gives the agent eyes and nothing else: read, glob, grep. Write access
-// waits for the permission engine in M3, so this is the phase where the
-// loop can be wrong without being destructive.
+// M2 gave the agent eyes and nothing else: read, glob, grep. M3 adds write
+// and edit, which is the point at which being wrong stops being free — so
+// they arrive behind the permission engine in policy.go and behind the
+// approval widget nb_approval.go already had.
 //
 // Two rules apply to every tool here.
 //
@@ -36,8 +38,37 @@ const toolOutputBudget = 24 * 1024
 // maxGrepMatches keeps a broad pattern from filling the context with hits.
 const maxGrepMatches = 200
 
+// maxWriteBytes bounds what one call may put on disk. A model that
+// hallucinates a loop into a `content` argument should cost a rejected tool
+// call, not the disk.
+const maxWriteBytes = 8 * 1024 * 1024
+
 func builtinTools() []Tool {
-	return []Tool{&readTool{}, &globTool{}, &grepTool{}}
+	return []Tool{&readTool{}, &globTool{}, &grepTool{}, &writeTool{}, &editTool{}, &bashTool{}}
+}
+
+// previewer is a tool that can describe what a call *would* do without
+// doing it.
+//
+// Two callers need this and neither can be served by running the tool
+// first. The policy gate has to show a human the proposed diff before they
+// approve it — after is too late — and the runner shows the same diff
+// afterwards as the record of what happened. Computing it once and using it
+// for both is also what keeps the two from disagreeing.
+type previewer interface {
+	Preview(in map[string]any, root string) string
+}
+
+// argBool reads a flag the same defensive way argString reads a string. A
+// transport without strict schema support can still deliver "true".
+func argBool(in map[string]any, key string) bool {
+	switch v := in[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
 }
 
 // argString/argInt read the model's arguments defensively. Strict schemas
@@ -274,6 +305,220 @@ func (t *grepTool) Run(ctx context.Context, in map[string]any, root string) (str
 		out += fmt.Sprintf("\n… stopped at %d matches; narrow the pattern …", maxGrepMatches)
 	}
 	return elide(out, toolOutputBudget), false, nil
+}
+
+// ─── write ──────────────────────────────────────────────────────────────
+
+type writeTool struct{}
+
+func (t *writeTool) Spec() ToolSpec {
+	return ToolSpec{
+		Name: "write",
+		Description: "Create a file, or replace one entirely, inside the notebook's working directory. " +
+			"Use this for a new file or a rewrite; to change part of an existing file use `edit` instead, " +
+			"which shows a smaller diff and cannot lose the rest of the file. " +
+			"Writing outside the working directory is refused.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "File path relative to the working directory. Parent directories are created.",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The complete new contents of the file.",
+				},
+			},
+			"required":             []string{"path", "content"},
+			"additionalProperties": false,
+		},
+	}
+}
+
+func (t *writeTool) Run(ctx context.Context, in map[string]any, root string) (string, bool, error) {
+	rel := argString(in, "path")
+	if rel == "" {
+		return "write: a path is required.", true, nil
+	}
+	// An absent content key is not an empty one. A missing field truncating
+	// a file is an accident nobody notices until the file is needed, so the
+	// two are kept distinguishable even though the schema requires it.
+	raw, ok := in["content"]
+	if !ok {
+		return "write: a content field is required. To empty a file, pass an explicit empty string.", true, nil
+	}
+	content, ok := raw.(string)
+	if !ok {
+		return "write: content must be a string.", true, nil
+	}
+	if len(content) > maxWriteBytes {
+		return fmt.Sprintf("write %s: content is %d bytes, over the %d-byte limit for one call.",
+			rel, len(content), maxWriteBytes), true, nil
+	}
+
+	// Containment before any I/O, and before the file is opened rather than
+	// after: opening with O_TRUNC and *then* refusing would destroy the
+	// target it was refusing to touch.
+	abs, err := containedPath(root, rel)
+	if err != nil {
+		return fmt.Sprintf("write %s: %v", rel, err), true, nil
+	}
+	existed := true
+	if _, statErr := os.Stat(abs); statErr != nil {
+		existed = false
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return fmt.Sprintf("write %s: %v", rel, err), true, nil
+	}
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		return fmt.Sprintf("write %s: %v", rel, err), true, nil
+	}
+
+	verb := "Created"
+	if existed {
+		verb = "Replaced"
+	}
+	return fmt.Sprintf("%s %s (%d lines, %d bytes).", verb, rel, countLines(content), len(content)), false, nil
+}
+
+func (t *writeTool) Preview(in map[string]any, root string) string {
+	rel := argString(in, "path")
+	content, ok := in["content"].(string)
+	if rel == "" || !ok {
+		return ""
+	}
+	abs, err := containedPath(root, rel)
+	if err != nil {
+		return ""
+	}
+	old, _ := os.ReadFile(abs) // a missing file previews as a creation
+	return unifiedDiff(rel, string(old), content)
+}
+
+// ─── edit ───────────────────────────────────────────────────────────────
+
+type editTool struct{}
+
+func (t *editTool) Spec() ToolSpec {
+	return ToolSpec{
+		Name: "edit",
+		Description: "Replace an exact string in a file inside the notebook's working directory. " +
+			"Use this to change part of a file you have read: it is refused unless old_string appears exactly once, " +
+			"so it cannot silently edit the wrong place. Include enough surrounding text to make the match unique.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "File path relative to the working directory.",
+				},
+				"old_string": map[string]any{
+					"type":        "string",
+					"description": "The exact text to replace, including whitespace and indentation.",
+				},
+				"new_string": map[string]any{
+					"type":        "string",
+					"description": "What to put in its place.",
+				},
+				"replace_all": map[string]any{
+					"type":        "boolean",
+					"description": "Replace every occurrence instead of requiring exactly one.",
+				},
+			},
+			"required":             []string{"path", "old_string", "new_string"},
+			"additionalProperties": false,
+		},
+	}
+}
+
+func (t *editTool) Run(ctx context.Context, in map[string]any, root string) (string, bool, error) {
+	abs, body, next, msg := editPlan(in, root)
+	if msg != "" {
+		return msg, true, nil
+	}
+	if err := os.WriteFile(abs, []byte(next), 0o644); err != nil {
+		return fmt.Sprintf("edit %s: %v", argString(in, "path"), err), true, nil
+	}
+	n := strings.Count(body, argString(in, "old_string"))
+	if !argBool(in, "replace_all") {
+		n = 1
+	}
+	return fmt.Sprintf("Edited %s (%d replacement%s).", argString(in, "path"), n, plural(n)), false, nil
+}
+
+func (t *editTool) Preview(in map[string]any, root string) string {
+	_, body, next, msg := editPlan(in, root)
+	if msg != "" {
+		return ""
+	}
+	return unifiedDiff(argString(in, "path"), body, next)
+}
+
+// editPlan resolves and validates an edit without performing it, so Run and
+// Preview cannot disagree about what the call means. msg is non-empty when
+// the call is refused, and is the text the model gets.
+//
+// Everything it refuses, it refuses *before* opening the file for writing:
+// an edit that fails must leave the file exactly as it was, because the
+// model's next move is to re-read it and a half-applied edit would send it
+// somewhere neither of us intended.
+func editPlan(in map[string]any, root string) (abs, body, next, msg string) {
+	rel := argString(in, "path")
+	if rel == "" {
+		return "", "", "", "edit: a path is required."
+	}
+	old := argString(in, "old_string")
+	if old == "" {
+		return "", "", "", "edit: old_string is required and cannot be empty. To replace a whole file, use write."
+	}
+	replacement := argString(in, "new_string")
+	if replacement == old {
+		return "", "", "", "edit: old_string and new_string are identical, so there is nothing to change."
+	}
+
+	abs, err := containedPath(root, rel)
+	if err != nil {
+		return "", "", "", fmt.Sprintf("edit %s: %v", rel, err)
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return "", "", "", fmt.Sprintf("edit %s: %v", rel, err)
+	}
+	body = string(raw)
+
+	n := strings.Count(body, old)
+	switch {
+	case n == 0:
+		return "", "", "", fmt.Sprintf("edit %s: %q does not appear in the file. Read it first — "+
+			"whitespace and indentation are part of the match.", rel, elide(old, 200))
+	case n > 1 && !argBool(in, "replace_all"):
+		// Taking the first match would put the edit somewhere the model did
+		// not look at, and the failure surfaces long after the run.
+		return "", "", "", fmt.Sprintf("edit %s: %q appears %d times. Include more surrounding text to "+
+			"identify which one, or pass replace_all.", rel, elide(old, 200), n)
+	}
+
+	if argBool(in, "replace_all") {
+		next = strings.ReplaceAll(body, old, replacement)
+	} else {
+		next = strings.Replace(body, old, replacement, 1)
+	}
+	return abs, body, next, ""
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // ─── Matching ───────────────────────────────────────────────────────────
