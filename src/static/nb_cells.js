@@ -124,6 +124,7 @@ function renderCell(cell, index) {
       <span class="nb-idx">${index}</span>
       <span class="nb-type">${escapeHTML(compact ? "compacted" : cell.type)}</span>
       ${stateChip(cell)}
+      ${modelChip(cell)}
       ${cacheChip(cell)}
     </div>
     <div class="nb-body ${tall ? "tall" : ""}">
@@ -174,6 +175,20 @@ function okLabel(cell) {
   return parts.length ? parts.join(" · ") : "ok";
 }
 
+// modelChip shows a cell's own model when it has one (#53). Without it a
+// per-cell override is invisible: two cells side by side, one answered by
+// a frontier model and one by whatever is running on this laptop, and
+// nothing in the document saying which was which.
+function modelChip(cell) {
+  const m = (cell.meta || {}).model;
+  if (!m) return "";
+  const effort = (cell.meta || {}).effort;
+  const label = effort ? `${m} · ${effort}` : m;
+  return `<span class="nb-chip chip-model" title="${escapeHTML(
+    "This cell overrides the notebook's model, and runs on whichever transport serves it.",
+  )}">${escapeHTML(label)}</span>`;
+}
+
 // cacheChip is the number M2.5 exists to produce (#51). It is rendered
 // separately, and rendered as a warning at zero, because a re-run showing
 // no cache reads is the canary for a projection bug — not a pricing
@@ -182,7 +197,24 @@ function cacheChip(cell) {
   const u = cell.usage || {};
   const total = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheCreationTokens || 0);
   if (!total) return "";
-  const pct = Math.round(((u.cacheReadTokens || 0) / total) * 100);
+  const read = u.cacheReadTokens || 0;
+  // #53. On a transport with no cached-token counter — Ollama, llama.cpp,
+  // vLLM — that warning would fire on every cell forever, reporting a miss
+  // that never happened and sending the reader after a bug that is not
+  // there. So the absence is stated instead.
+  //
+  // cacheMode is derived per cell on the server, because a cell can name
+  // its own model and so its own transport. It arrives with the fold, so a
+  // cell inserted over the websocket since then falls back to the
+  // notebook's transport — right for every cell that has not overridden
+  // its model, and re-reading the fold settles the rest.
+  const mode = cell.cacheMode || state.notebook?.provider?.capabilities?.cache;
+  if (!read && mode === "none") {
+    return `<span class="nb-chip chip-cache-na" title="${escapeHTML(
+      "This model's endpoint does not report cache use, so there is no figure to show — not a cache miss.",
+    )}">cache n/a</span>`;
+  }
+  const pct = Math.round((read / total) * 100);
   const cold = pct === 0;
   const title = cold
     ? "Nothing was served from cache. Expected on a first run; on a re-run of the same cell it means the prefix is not matching."

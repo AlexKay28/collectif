@@ -20,7 +20,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -67,6 +67,19 @@ func newAnthropicProvider(opts ...option.RequestOption) *anthropicProvider {
 
 func (p *anthropicProvider) Name() string        { return "anthropic" }
 func (p *anthropicProvider) Models() []ModelInfo { return anthropicModels }
+
+// Capabilities — the reference transport, and the only one with explicit
+// cache breakpoints. Everything M2.5 assumes about caching is true here
+// and has to be asked about anywhere else.
+func (p *anthropicProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Cache:           CacheExplicit,
+		Reasoning:       true,
+		SignedReasoning: true,
+		Effort:          true,
+		Usage:           true,
+	}
+}
 
 func (p *anthropicProvider) Stream(ctx context.Context, req Request) (Stream, error) {
 	params := buildAnthropicRequest(req)
@@ -419,9 +432,39 @@ func (s *anthropicStream) Next() (Chunk, error) {
 	}
 	if err := s.stream.Err(); err != nil {
 		s.err = err
-		return Chunk{}, fmt.Errorf("anthropic stream: %w", err)
+		return Chunk{}, classifyAnthropicError(err)
 	}
 	return Chunk{}, io.EOF
+}
+
+// classifyAnthropicError lifts an SDK error into the shared shape.
+//
+// The SDK reports a failed request through Err() on the first read rather
+// than from NewStreaming, so this is the only place a 401 can be caught.
+// Cancellation is passed through untouched: the loop distinguishes an
+// interrupt from a failure with errors.Is(err, context.Canceled), and
+// wrapping it in a kind of its own would make every interrupted cell read
+// as an error.
+func classifyAnthropicError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	pe := &ProviderError{Kind: ProviderErrTransport, Provider: "anthropic", err: err}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		pe.Status = apiErr.StatusCode
+		pe.Kind = classifyHTTPStatus(apiErr.StatusCode)
+		pe.Detail = providerErrorDetail([]byte(apiErr.RawJSON()))
+		// overloaded_error is a 529 in the docs but has been seen behind
+		// other statuses; the body is the more specific signal.
+		if apiErr.Type() == "overloaded_error" {
+			pe.Kind = ProviderErrOverloaded
+		}
+	}
+	return pe
 }
 
 func (s *anthropicStream) Result() Result { return normaliseAnthropicResult(s.acc) }
@@ -462,16 +505,33 @@ func anthropicCredentialsPresent() bool {
 	return err == nil && len(entries) > 0
 }
 
-// initProviders selects the transport and tools the notebook loop will use.
-// Called once at boot; leaves activeProvider nil when nothing is available,
-// so a prompt cell answers 503 rather than failing mid-run.
+// initProviders selects the transports and tools the notebook loop will
+// use. Called once at boot; leaves activeProvider nil when nothing is
+// available, so a prompt cell answers 503 rather than failing mid-run.
+//
+// Every configured transport is installed rather than the first one found:
+// a machine with an Anthropic key and a local Ollama is the case #53
+// exists for, and a per-cell model override cannot route to a transport
+// that was never registered. Anthropic goes first — it has the fuller
+// feature set, and first is what a notebook with no model setting gets.
 func initProviders() {
 	activeTools = builtinTools()
-	if !anthropicCredentialsPresent() {
-		log.Printf("notebooks: no Anthropic credentials found — prompt cells will report that no provider is configured")
+	activeProviders = nil
+
+	if anthropicCredentialsPresent() {
+		activeProviders = append(activeProviders, newAnthropicProvider())
+	}
+	if p := initOpenAIProvider(); p != nil {
+		activeProviders = append(activeProviders, p)
+	}
+
+	if len(activeProviders) == 0 {
+		activeProvider = nil
+		log.Printf("notebooks: no model provider configured — prompt cells in detached notebooks will say so; " +
+			"set ANTHROPIC_API_KEY, or OPENAI_BASE_URL/OPENAI_API_KEY, or OLLAMA_HOST")
 		return
 	}
-	activeProvider = newAnthropicProvider()
-	log.Printf("notebooks: provider %s ready (default model %s, %d tools)",
-		activeProvider.Name(), anthropicDefaultModel, len(activeTools))
+	activeProvider = activeProviders[0]
+	log.Printf("notebooks: provider %s ready (%d transports, %d tools)",
+		activeProvider.Name(), len(activeProviders), len(activeTools))
 }

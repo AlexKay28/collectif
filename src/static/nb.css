@@ -182,8 +182,12 @@ html, body {
 .chip-error { color: var(--nb-err); }
 .chip-interrupted { color: var(--nb-run); }
 .chip-stale { color: var(--nb-stale); font-style: italic; }
+.chip-model { color: var(--nb-dim); }
 .chip-cache { color: var(--nb-ok); }
 .chip-cache-cold { color: var(--nb-run); }
+/* "not reported" is neither good news nor a warning — it must not read as
+   either, so it gets the muted colour rather than the cold-cache one. */
+.chip-cache-na { color: var(--nb-dim); }
 
 .nb-body { min-width: 0; }
 

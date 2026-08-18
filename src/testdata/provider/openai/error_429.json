@@ -1,0 +1,1 @@
+{"error":{"message":"fixture-detail: Rate limit reached for gpt-5-mini in organization org-x on tokens per min","type":"tokens","param":null,"code":"rate_limit_exceeded"}}

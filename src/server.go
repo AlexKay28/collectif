@@ -56,6 +56,9 @@ func (srv *Server) Router() http.Handler {
 	// degrade for adapters that don't support them.
 	mux.HandleFunc("/api/cli", handleCLIList)
 	mux.HandleFunc("/api/hooks", handleHook)
+	// #53: the configured model transports, their catalogs and what each
+	// can actually report. Derived per request — see provider_api.go.
+	mux.HandleFunc("/api/providers", handleProviderList)
 	mux.HandleFunc("/ws/session/", handleSessionWS)
 	mux.HandleFunc("/ws/dashboard", handleDashboardWS)
 	mux.HandleFunc("/healthz", handleHealthz)

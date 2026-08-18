@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,15 +24,19 @@ import (
 // Prices are USD per million tokens, and the cached rates are separate
 // because they differ by an order of magnitude — a cost model that ignored
 // that would make M2.5's whole argument invisible.
+// The json tags are for GET /api/providers (#53); every other endpoint in
+// this codebase serialises camelCase and a picker reading ContextWindow
+// from one row and contextWindow from another is a bug waiting for the
+// second consumer.
 type ModelInfo struct {
-	ID            string
-	ContextWindow int
-	MaxOutput     int
+	ID            string `json:"id"`
+	ContextWindow int    `json:"contextWindow"`
+	MaxOutput     int    `json:"maxOutput"`
 
-	InputUSDPerMTok      float64
-	OutputUSDPerMTok     float64
-	CacheReadUSDPerMTok  float64
-	CacheWriteUSDPerMTok float64
+	InputUSDPerMTok      float64 `json:"inputUsdPerMTok"`
+	OutputUSDPerMTok     float64 `json:"outputUsdPerMTok"`
+	CacheReadUSDPerMTok  float64 `json:"cacheReadUsdPerMTok"`
+	CacheWriteUSDPerMTok float64 `json:"cacheWriteUsdPerMTok"`
 }
 
 // usageCostUSD prices one turn. Cache reads and writes are billed at their
@@ -304,7 +309,150 @@ type Stream interface {
 type Provider interface {
 	Name() string
 	Models() []ModelInfo
+	// Capabilities is what this transport can actually do, so the notebook
+	// can show that rather than guess. It is a method rather than a
+	// registry entry for the same reason model catalogs are (#48): the
+	// only code that knows is the code that talks to the API.
+	Capabilities() ProviderCapabilities
+	// Stream opens one turn. An error may surface here or from the first
+	// Next: the Anthropic SDK opens its connection lazily and reports a
+	// 401 on the first read, while a hand-rolled client knows immediately.
+	// Callers must handle both — nb_agent.go does, and so does the
+	// conformance suite.
 	Stream(ctx context.Context, req Request) (Stream, error)
+}
+
+// CacheMode is how a transport caches a prompt prefix, and it exists
+// because "0% cached" and "this API does not report caching" are the same
+// pixel otherwise.
+//
+// M2.5 put a cache figure on every prompt cell precisely so that a zero
+// would be noticed — a re-run serving nothing from cache means the prefix
+// is not matching, which is a bug in how the request is rendered. On a
+// transport with no cache reporting at all, that same zero is not evidence
+// of anything, and showing it sends the user hunting for a bug that is not
+// there. Same class of quiet wrongness ADR 0002 §1 is about.
+type CacheMode string
+
+const (
+	// CacheNone: the endpoint neither reports nor (as far as we can tell)
+	// performs prefix caching. Ollama, llama.cpp and vLLM all sit here.
+	CacheNone CacheMode = "none"
+	// CacheAutomatic: the server caches prefixes on its own and reports
+	// what it reused. Nothing to place, nothing to steer.
+	CacheAutomatic CacheMode = "automatic"
+	// CacheExplicit: we place breakpoints and are billed for writes.
+	CacheExplicit CacheMode = "explicit"
+)
+
+// ProviderCapabilities is the derived, never stored answer to "what can
+// this transport tell me" — the same pattern as NotebookFidelity (#47 P2),
+// for the same reason: a capability written into a document is still
+// asserting it long after the code changed.
+type ProviderCapabilities struct {
+	Cache CacheMode `json:"cache"`
+	// Reasoning is whether reasoning text can come back at all. False
+	// means a notebook shows no thinking on this transport however the
+	// model was configured, which is worth saying out loud rather than
+	// leaving as an absence.
+	Reasoning bool `json:"reasoning"`
+	// SignedReasoning is whether reasoning can be echoed back on the next
+	// turn. Anthropic requires it (a tool-calling turn is a 400 without
+	// its signed thinking blocks); nothing OpenAI-compatible accepts it.
+	SignedReasoning bool `json:"signedReasoning"`
+	// Effort is whether the low..max lever reaches the model.
+	Effort bool `json:"effort"`
+	// Usage is whether token counts are reported. An endpoint that reports
+	// none makes every cell look free, so the notebook says "not reported"
+	// rather than printing zeros.
+	Usage bool `json:"usage"`
+}
+
+// ─── Errors ─────────────────────────────────────────────────────────────
+
+// ProviderErrorKind classifies a failed turn into the handful of things a
+// user can actually do something about. Without it every failure reads as
+// "provider: <wall of JSON>" and a bad key is indistinguishable from an
+// outage — the loop already surfaces the text, so the text has to carry
+// the distinction.
+type ProviderErrorKind string
+
+const (
+	ProviderErrAuth       ProviderErrorKind = "auth"
+	ProviderErrRateLimit  ProviderErrorKind = "rate_limit"
+	ProviderErrBadRequest ProviderErrorKind = "bad_request"
+	ProviderErrOverloaded ProviderErrorKind = "overloaded"
+	ProviderErrServer     ProviderErrorKind = "server"
+	ProviderErrTransport  ProviderErrorKind = "transport"
+)
+
+type ProviderError struct {
+	Kind ProviderErrorKind
+	// Provider names the transport, because with two configured "401" on
+	// its own does not say which key is wrong.
+	Provider string
+	Status   int
+	// Detail is the API's own explanation. It is kept verbatim: it is the
+	// only part of the error that says what to fix.
+	Detail string
+	err    error
+}
+
+func (e *ProviderError) Error() string {
+	parts := e.Provider
+	if e.Status != 0 {
+		parts = fmt.Sprintf("%s %d", parts, e.Status)
+	}
+	if e.Detail != "" {
+		return fmt.Sprintf("%s (%s): %s", parts, e.Kind, e.Detail)
+	}
+	if e.err != nil {
+		return fmt.Sprintf("%s (%s): %v", parts, e.Kind, e.err)
+	}
+	return fmt.Sprintf("%s (%s)", parts, e.Kind)
+}
+
+func (e *ProviderError) Unwrap() error { return e.err }
+
+// classifyHTTPStatus maps a status onto a kind. Both transports go through
+// it so "429" means the same thing on each.
+func classifyHTTPStatus(status int) ProviderErrorKind {
+	switch {
+	case status == 401 || status == 403:
+		return ProviderErrAuth
+	case status == 429:
+		return ProviderErrRateLimit
+	case status == 529 || status == 503:
+		return ProviderErrOverloaded
+	case status >= 500:
+		return ProviderErrServer
+	case status >= 400:
+		return ProviderErrBadRequest
+	}
+	return ProviderErrTransport
+}
+
+// providerErrorDetail digs the message out of the two error envelopes both
+// families use: {"error":{"message":…}} for OpenAI-compatible endpoints and
+// the same shape under a "type":"error" wrapper for Anthropic. A body that
+// matches neither is returned as-is rather than dropped — an unrecognised
+// error is still the only account of what went wrong.
+func providerErrorDetail(body []byte) string {
+	var env struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil {
+		if env.Error.Message != "" {
+			return env.Error.Message
+		}
+		if env.Message != "" {
+			return env.Message
+		}
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // Tool is a capability the model can invoke. Run reports the result text
@@ -319,10 +467,41 @@ type Tool interface {
 // nil/empty until a transport is configured (M2 slice B) — a prompt cell
 // answers 503 rather than pretending, which is the same honesty the 501 on
 // prompt cells had in M1.
+//
+// activeProviders is every configured transport (#53). activeProvider is
+// the first of them and stays the default a notebook gets when it has not
+// named a model; the two are kept separate rather than collapsing to
+// activeProviders[0] because most call sites want "the default", and
+// spelling that as an index invites an out-of-range on an empty list.
 var (
-	activeProvider Provider
-	activeTools    []Tool
+	activeProvider  Provider
+	activeProviders []Provider
+	activeTools     []Tool
 )
+
+// providerForModel decides which transport answers a model id.
+//
+// A catalog match wins, by longest prefix, so a dated snapshot routes with
+// its alias. An id nobody catalogues falls to the default rather than
+// erroring: every local server has model ids that exist only on the
+// machine it runs on, and refusing them would make Ollama unusable to keep
+// a lookup table feeling authoritative.
+func providerForModel(model string) Provider {
+	if model == "" {
+		return activeProvider
+	}
+	var best Provider
+	bestLen := 0
+	for _, p := range activeProviders {
+		if m, ok := lookupModel(p.Models(), model); ok && len(m.ID) > bestLen {
+			best, bestLen = p, len(m.ID)
+		}
+	}
+	if best != nil {
+		return best
+	}
+	return activeProvider
+}
 
 func lookupTool(name string) Tool {
 	for _, t := range activeTools {

@@ -123,6 +123,13 @@ type Cell struct {
 	// provider rather than inferred from a transcript (#50). Zero for cell
 	// types that don't call a model.
 	Usage Usage `json:"usage,omitempty"`
+
+	// CacheMode is what the transport behind *this* cell's model can say
+	// about prompt caching (#53). Derived on every read, never folded: a
+	// cell whose model resolves to a transport with no cached-token
+	// counter must render "not reported" rather than "0% cached", which
+	// reads as a miss and then as a bug.
+	CacheMode CacheMode `json:"cacheMode,omitempty"`
 }
 
 type NotebookMeta struct {
@@ -155,6 +162,11 @@ type Notebook struct {
 	// written: what a build can do is a property of the code, not of the
 	// document, and a claim frozen into a log goes stale silently.
 	Fidelity *NotebookFidelity `json:"fidelity,omitempty"`
+
+	// Provider is the transport this notebook's prompt cells run on,
+	// derived on every read for the same reason Fidelity is (#53). Nil on
+	// a mirrored session: there the CLI is the agent and already chose.
+	Provider *NotebookProvider `json:"provider,omitempty"`
 
 	// Version is the number of events folded in, including ones this build
 	// did not understand. It is the log's position, not a schema version.

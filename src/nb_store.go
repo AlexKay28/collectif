@@ -320,6 +320,8 @@ func (st *notebookStore) Doc() *Notebook {
 	// Derived, not folded (#47 P2). Filled here because this is the single
 	// read path, so no caller can accidentally serve a document without it.
 	doc.Fidelity = fidelityFor(doc)
+	doc.Provider = providerInfoFor(doc)
+	annotateCacheModes(doc)
 	return doc
 }
 
