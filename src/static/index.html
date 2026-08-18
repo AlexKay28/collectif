@@ -8,6 +8,12 @@
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="gh_issues.css">
 <link rel="stylesheet" href="gh_prs.css">
+<!-- #56: the notebook is the session view now, so the dashboard loads the
+     cell vocabulary itself. nb.css is deliberately NOT here — it styles a
+     page (html/body, header, sidebar, overlay) and would redecorate this
+     one. nb_embed.css is the panel this dashboard puts those cells in. -->
+<link rel="stylesheet" href="nb_cells.css">
+<link rel="stylesheet" href="nb_embed.css">
 </head>
 <body>
 <div id="app">
@@ -44,7 +50,7 @@
             <div class="term-panel">
               <div class="empty" id="term-empty">
                 <div style="font-size:28px" aria-hidden="true">🤖</div>
-                <div>Select an agent on the left to open its terminal here.</div>
+                <div>Select an agent on the left to open its notebook here.</div>
               </div>
               <div id="term-head" class="term-head" style="display:none">
                 <div class="avatar"><img id="d-avatar" alt=""></div>
@@ -56,12 +62,41 @@
                   <div class="cwd" id="d-cwd"></div>
                   <div class="task" id="d-task"></div>
                 </div>
+                <!-- #56 / ADR 0002 D8′. Opening a session shows its
+                     notebook — the turns projected from its transcript —
+                     and the raw PTY is one click away rather than being
+                     the only thing on offer. Both views describe the same
+                     session, so they share this header. -->
+                <div class="view-switch" id="session-view" role="tablist" aria-label="Session view">
+                  <button type="button" role="tab" data-view="notebook" class="on" aria-selected="true"
+                          title="What this agent did, as a document">Notebook</button>
+                  <button type="button" role="tab" data-view="terminal" aria-selected="false"
+                          title="The raw PTY — everything a projection cannot show">Terminal</button>
+                </div>
                 <div class="actions">
                   <button id="d-copy" type="button" aria-label="Open terminal output copy dialog" title="Open copy dialog (Ctrl+Shift+C)">Copy…</button>
                   <!-- #35 shown only when status === paused_over_budget -->
                   <button id="d-resume" type="button" style="display:none" aria-label="Resume paused agent" title="Resume the paused agent (clears its cost cap)">Resume anyway</button>
                   <button id="d-kill" type="button" class="ghost" aria-label="Kill selected agent">Kill</button>
                 </div>
+              </div>
+              <!-- The session view. Its cells, outputs and keyboard model
+                   are the same code /notebook.html runs — nb_cells.css and
+                   nb_cells.js are shared verbatim — so the two surfaces
+                   cannot drift in what a cell means or what a button does.
+                   Mounted by nb_embed.js. -->
+              <div id="nb-embed" style="display:none">
+                <div class="nb-embed-head">
+                  <span class="sp"></span>
+                  <a id="nb-embed-export" href="#" target="_blank" rel="noopener"
+                     title="This session as markdown, for a PR description">export ↗</a>
+                  <a id="nb-embed-page" href="#" target="_blank" rel="noopener"
+                     title="This document on its own page, with the keyboard map">open as page ↗</a>
+                </div>
+                <div id="nb-error" role="alert"></div>
+                <div id="nb-fidelity" style="display:none"></div>
+                <div id="nb-embed-empty" class="nb-embed-empty" style="display:none"></div>
+                <main id="nb-cells"></main>
               </div>
               <div class="term-body" id="term-body" style="display:none">
                 <div id="term-container"></div>
@@ -300,6 +335,12 @@
 <script src="app.js"></script>
 <script src="gh_issues.js" defer></script>
 <script src="gh_prs.js" defer></script>
+<!-- A module, so it runs after every classic script above and can call
+     into them. Everything it needs from this page (renderTermPanel,
+     teardownTerminal, collectifCLIByName) is a global those files already
+     publish, and everything this page needs from it is guarded — if this
+     fails to load, the dashboard is the product it was before #56. -->
+<script type="module" src="nb_embed.js"></script>
 <style>
   /* #44 right-panel tabs — Team / Issues / PRs live inside #dash-team-panel.
      The parent (.dash-team) is a flex column with height 100%; the tab bar

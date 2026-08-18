@@ -15,6 +15,29 @@ function setConnIndicator(reconnecting) {
   const el = document.getElementById("conn-indicator");
   if (el) el.style.display = reconnecting ? "" : "none";
 }
+// The notebook page has always linked here as `/?token=…#agent=<id>` — the
+// D8' escape hatch, "show me the raw bytes behind this document" — and
+// nothing on this side has ever read that fragment. The link opened the
+// dashboard with nothing selected, which reads as the button being broken.
+//
+// Applied on the first snapshot because the agent map is empty before it,
+// and the fragment is cleared afterwards so a later reload does not drag
+// the user back to a session they have since navigated away from.
+let agentDeepLinkPending = true;
+function applyAgentDeepLink() {
+  if (!agentDeepLinkPending) return;
+  const m = /^#agent=([A-Za-z0-9_-]+)$/.exec(location.hash || "");
+  if (!m) { agentDeepLinkPending = false; return; }
+  if (!agents.has(m[1])) return; // the session may not be in this snapshot yet
+  agentDeepLinkPending = false;
+  selectAgent(m[1]);
+  // The link asked for the terminal specifically. Guarded because the
+  // session-view module may not have loaded; the notebook is the default
+  // either way, which is a worse answer here but not a broken one.
+  if (window.collectifSessionView) window.collectifSessionView.show("terminal");
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
 function connectDashboardWS() {
   dashWS = new WebSocket(wsURL("/ws/dashboard"));
   dashWS.onopen = () => {
@@ -31,6 +54,7 @@ function connectDashboardWS() {
       if (window.collectifNotify) {
         for (const a of msg.agents) window.collectifNotify.seed(a);
       }
+      applyAgentDeepLink();
     } else if (msg.type === "upsert") {
       agents.set(msg.agent.id, msg.agent);
       // #36 Fire a browser notification if this transition is notable and the

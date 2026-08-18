@@ -13,8 +13,15 @@
 // or below the folded position is already included, and anything this build
 // doesn't understand triggers a refetch instead of a guess.
 
+// The token reaches us two ways and both are needed. On /notebook.html it
+// is in the query string. Inside the dashboard it is not: auth.js takes it
+// out of the URL and stashes it, so reading only location.search gave the
+// embedded notebook an empty token — its fetches survived on auth.js's
+// Authorization header, but every WebSocket URL carries the token in the
+// query and those failed the auth gate with nothing on screen to say why.
 const qs = new URLSearchParams(location.search);
-export const TOKEN = qs.get("token") || "";
+export const TOKEN =
+  qs.get("token") || sessionStorage.getItem("collectif.token") || "";
 
 export const state = {
   id: null,
@@ -279,8 +286,12 @@ function connect() {
 // ─── PTY sessions ─────────────────────────────────────────────────────
 
 // The dashboard's own stream, consumed read-only. The notebook never
-// drives a session — spawning, answering prompts and the terminal itself
-// all still live in the dashboard until M7 retires it. This is a view.
+// drives a session — spawning a session and the terminal itself belong to
+// the dashboard, which stays the front door (ADR 0002 D8'). This is a view.
+//
+// Only /notebook.html calls this. Inside the dashboard the page already
+// holds one /ws/dashboard socket, and a second one from the same tab would
+// double every broadcast for a list this embed does not draw.
 export async function watchSessions() {
   try {
     state.sessions = (await nbAPI.sessions()) || [];

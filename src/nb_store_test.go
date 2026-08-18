@@ -376,3 +376,38 @@ func TestNotebookStore_AMatchingSnapshotIsStillUsed(t *testing.T) {
 			len(got.Cells), got.Version, len(want.Cells), want.Version)
 	}
 }
+
+// #56 open question 4: retention. Nothing deletes a notebook and nothing
+// should silently — but a directory that grows forever without anyone ever
+// being told how large it is, is a directory that surprises someone. The
+// listing carries the size so the UI can say it out loud.
+func TestListNotebooks_ReportsBytesOnDisk(t *testing.T) {
+	dir := withTempNotebooks(t)
+
+	st, err := createNotebook("Sized", t.TempDir())
+	if err != nil {
+		t.Fatalf("createNotebook: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := st.Append(evCellInserted, cellInsertedPayload{
+			Cell: Cell{ID: fmt.Sprintf("c%d", i), Type: CellMarkdown, Source: strings.Repeat("x", 200)},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	list, err := listNotebooks()
+	if err != nil {
+		t.Fatalf("listNotebooks: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listNotebooks returned %d entries, want 1", len(list))
+	}
+	info, err := os.Stat(filepath.Join(dir, st.slug+".jsonl"))
+	if err != nil {
+		t.Fatalf("stat log: %v", err)
+	}
+	if list[0].Bytes < info.Size() {
+		t.Errorf("Bytes = %d, want at least the log's %d", list[0].Bytes, info.Size())
+	}
+}

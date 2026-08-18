@@ -1,0 +1,445 @@
+/* nb_cells.css — the cell, the output, and everything drawn inside one.
+   Split out of nb.css for #56, when the notebook became the session view
+   inside the dashboard (ADR 0002 D8').
+
+   The split is along a real seam rather than a convenient one. nb.css is a
+   *page*: it sets html/body, a header, a sidebar, a keyboard-map overlay.
+   None of that can be loaded into the dashboard without redecorating it.
+   What can — and must, because it is the same document either way — is the
+   vocabulary of a cell: the gutter, the state chips, the serif/mono split
+   between language and code, the outputs. That is this file.
+
+   The two ideas from nb.css hold here unchanged and are the reason this
+   file must never grow a second palette:
+
+   ONE: the only colour is state. Everything structural is warm neutral
+   grey and near-white ink, so running / done / failed / stale are the only
+   hues on the page and cannot be missed.
+
+   TWO: a cell's source is either language or code, and the type says
+   which. Markdown and prompt are prose, set in a serif; shell sources and
+   every output are code, set in mono. */
+
+:root {
+  --nb-ground:   #100f0e;
+  --nb-panel:    #161513;
+  --nb-sunken:   #0b0a09;
+  --nb-rule:     #2b2825;
+  --nb-rule-soft:#201e1c;
+
+  --nb-ink:      #ece8e3;
+  --nb-dim:      #a29c94;
+  --nb-muted:    #6e6862;
+
+  /* The only hues on the page. */
+  --nb-ok:       #7fc98b;
+  --nb-run:      #e0a458;
+  --nb-err:      #ef7d72;
+  --nb-stale:    #8b90a8;
+
+  --nb-serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+  --nb-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* The one bar both hosts need: a failure, or a confirmation said calmly. */
+#nb-error {
+  display: none; grid-column: 1 / -1;
+  padding: 8px 18px;
+  font: 12px var(--nb-mono); color: var(--nb-err);
+  background: rgba(239,125,114,.08);
+  border-bottom: 1px solid rgba(239,125,114,.3);
+}
+/* Same bar, said calmly: a confirmation borrowing the error's red would
+   teach people to distrust the colour. */
+#nb-error.note {
+  color: var(--nb-dim);
+  background: rgba(236,232,227,.05);
+  border-bottom-color: var(--nb-rule);
+}
+.nb-empty { color: var(--nb-muted); font-style: italic; padding: 30px; }
+
+/* ── Cells ───────────────────────────────────────────────────────── */
+
+/* A margin note plus a body — a manuscript, not a card. */
+.nb-cell {
+  display: grid;
+  grid-template-columns: 58px minmax(0,1fr);
+  column-gap: 16px;
+  padding: 13px 0 17px;
+  border-top: 1px solid var(--nb-rule-soft);
+  position: relative;
+}
+.nb-cell:first-child { border-top: 0; }
+.nb-cell.sel::before {
+  content: ""; position: absolute;
+  left: -14px; top: 11px; bottom: 11px; width: 2px;
+  background: var(--nb-dim); border-radius: 1px;
+}
+
+.nb-gutter {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+  padding-top: 2px; text-align: right; user-select: none;
+}
+.nb-idx  { font: 11px var(--nb-mono); color: var(--nb-muted); font-variant-numeric: tabular-nums; }
+.nb-type { font: 9.5px var(--nb-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--nb-muted); }
+.nb-chip { font: 10px var(--nb-mono); letter-spacing: .03em; color: var(--nb-muted); }
+.chip-running { color: var(--nb-run); }
+.chip-ok { color: var(--nb-ok); }
+.chip-error { color: var(--nb-err); }
+.chip-interrupted { color: var(--nb-run); }
+.chip-stale { color: var(--nb-stale); font-style: italic; }
+.chip-cache { color: var(--nb-ok); }
+.chip-cache-cold { color: var(--nb-run); }
+
+.nb-body { min-width: 0; }
+
+/* Prose: markdown source, rendered. */
+.nb-md { font: 16px/1.62 var(--nb-serif); max-width: 66ch; }
+.nb-md > :first-child { margin-top: 0; }
+.nb-md > :last-child { margin-bottom: 0; }
+.nb-md h1 { font: 600 25px/1.2 var(--nb-serif); margin: 2px 0 12px; }
+.nb-md h2 { font: 600 20px/1.25 var(--nb-serif); margin: 20px 0 9px; }
+.nb-md h3 { font: 600 17px/1.3 var(--nb-serif); margin: 16px 0 7px; }
+.nb-md p { margin: 0 0 12px; }
+.nb-md ul, .nb-md ol { margin: 0 0 12px; padding-left: 22px; }
+.nb-md li { margin-bottom: 4px; }
+.nb-md li::marker { color: var(--nb-muted); }
+.nb-md a { color: var(--nb-ink); text-decoration: underline; text-underline-offset: 2px; }
+.nb-md code { font: 13.5px var(--nb-mono); background: var(--nb-sunken); padding: 1px 5px; border-radius: 3px; }
+.nb-md pre.code {
+  font: 13px/1.55 var(--nb-mono); background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule-soft); border-radius: 4px;
+  padding: 11px 13px; overflow-x: auto;
+}
+.nb-md hr { border: 0; border-top: 1px solid var(--nb-rule); margin: 18px 0; }
+
+/* A prompt is language too, but an instruction rather than a document —
+   so it is quoted rather than set as body text. */
+.nb-src-view.prose {
+  font: 16px/1.6 var(--nb-serif); color: var(--nb-ink);
+  background: transparent; border: 0;
+  border-left: 2px solid var(--nb-rule);
+  border-radius: 0; padding: 1px 0 1px 14px; max-width: 66ch;
+}
+/* Code: shell source. */
+.nb-src-view {
+  font: 13.5px/1.55 var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule-soft); border-radius: 4px;
+  padding: 10px 12px; margin: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+.nb-src {
+  width: 100%;
+  font: 13.5px/1.55 var(--nb-mono); color: var(--nb-ink);
+  background: var(--nb-sunken);
+  border: 1px solid var(--nb-rule); border-radius: 4px;
+  padding: 10px 12px; resize: vertical; outline: none;
+}
+.nb-src.prose { font: 15.5px/1.6 var(--nb-serif); }
+.nb-src:focus { border-color: var(--nb-dim); }
+.nb-hint { color: var(--nb-muted); font-style: italic; }
+
+/* ── Output ──────────────────────────────────────────────────────── */
+
+/* Subordinate to source: inset, quieter, marked by a rule in the state
+   colour so a glance down the page tells you what worked. */
+.out {
+  font: 12.5px/1.55 var(--nb-mono); color: var(--nb-dim);
+  background: transparent;
+  border: 0; border-left: 2px solid var(--nb-rule);
+  border-radius: 0; margin: 10px 0 0; padding: 2px 0 2px 13px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 440px; overflow: auto;
+}
+.state-ok .out { border-left-color: rgba(127,201,139,.45); }
+.state-running .out { border-left-color: var(--nb-run); }
+.state-error .out, .out.err { border-left-color: var(--nb-err); color: #f2b3ad; }
+.state-stale .out { opacity: .5; }
+
+.caret {
+  display: inline-block; width: 7px; height: 13px;
+  background: var(--nb-run); vertical-align: text-bottom;
+  animation: nb-blink 1.05s step-end infinite;
+}
+@keyframes nb-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+
+.out.think { border-left-color: var(--nb-rule); padding: 0 0 0 13px; }
+.out.think > summary {
+  cursor: pointer; list-style: none;
+  font: 10.5px var(--nb-mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--nb-muted); padding: 3px 0;
+}
+.out.think > summary::before { content: "▸ "; }
+.out.think[open] > summary::before { content: "▾ "; }
+.out.think > pre { margin: 0 0 6px; font: 12.5px/1.55 var(--nb-mono); color: var(--nb-muted); white-space: pre-wrap; }
+.out.tool { display: flex; gap: 9px; align-items: baseline; font: 12px var(--nb-mono); border-left-color: var(--nb-dim); color: var(--nb-ink); }
+.out.tool .tool-args { color: var(--nb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.out.diff .d-add { color: var(--nb-ok); display: block; }
+.out.diff .d-del { color: var(--nb-err); display: block; }
+.out.diff .d-hunk { color: var(--nb-dim); display: block; }
+.out.diff .d-file { color: var(--nb-muted); display: block; }
+.out.diff .d-ctx { display: block; }
+
+/* A failure that belongs to a cell is shown on that cell and stays until
+   dismissed. A toast at the top of the page for a cell further down is how
+   pressing run reads as nothing happening at all. */
+.cell-error {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 10px 0 0; padding: 9px 13px;
+  border-left: 2px solid var(--nb-err);
+  background: rgba(239,125,114,.07);
+  font: 12.5px/1.5 var(--nb-mono); color: #f2b3ad;
+}
+.cell-error .x {
+  margin-left: auto; background: none; border: 0;
+  color: var(--nb-muted); cursor: pointer; font: 12px var(--nb-mono); padding: 0 2px;
+}
+.cell-error .x:hover { color: var(--nb-ink); }
+
+/* ── Actions ─────────────────────────────────────────────────────── */
+
+/* Hidden until hover or selection: a document should not be covered in
+   buttons. */
+.nb-actions {
+  position: absolute; right: 0; top: 11px;
+  display: flex; gap: 4px; opacity: 0; transition: opacity .12s ease;
+}
+.nb-cell:hover .nb-actions, .nb-cell.sel .nb-actions { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .nb-actions { transition: none; } }
+.nb-actions button {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  font: 11px var(--nb-mono); color: var(--nb-muted);
+  background: var(--nb-panel); border: 1px solid var(--nb-rule);
+  border-radius: 3px; cursor: pointer;
+}
+.nb-actions button:hover { color: var(--nb-ink); border-color: var(--nb-dim); }
+
+.nb-add-row { display: flex; gap: 8px; padding: 20px 0 0 74px; }
+.nb-add-row button {
+  font: 11px var(--nb-mono); letter-spacing: .06em;
+  color: var(--nb-muted); background: transparent;
+  border: 1px dashed var(--nb-rule); border-radius: 3px;
+  padding: 6px 12px; cursor: pointer;
+}
+.nb-add-row button:hover { color: var(--nb-ink); border-color: var(--nb-dim); border-style: solid; }
+
+/* o / ⇧o. Collapsed output leaves a line you can click, because a cell
+   whose output silently vanished looks broken rather than folded. */
+.out.collapsed {
+  font: 11px var(--nb-mono); color: var(--nb-muted);
+  padding: 6px 0; cursor: pointer;
+}
+.out.collapsed:hover { color: var(--nb-dim); }
+.nb-body.tall .out { max-height: none; }
+
+/* ── Mirrored cells (ADR 0002 D9) ────────────────────────────────────
+   A cell projected from a running CLI session. The design problem is
+   that it must read as *the same document* as your own cells while
+   being obviously not yours to edit — so the difference is carried by
+   the gutter and a left rule, not by a different colour scheme, a box,
+   or a badge. You should be able to skim a mixed notebook without your
+   eye being dragged to the provenance of every cell. */
+
+.nb-cell.mirrored .nb-type,
+.nb-cell.compact .nb-type { font-style: italic; color: var(--nb-muted); }
+
+.nb-cell.mirrored .nb-body { border-left: 1px solid var(--nb-rule-soft); padding-left: 14px; margin-left: -15px; }
+.nb-cell.mirrored:hover .nb-body { border-left-color: var(--nb-rule); }
+
+/* The prompt someone actually typed is the anchor of the turn: it gets
+   the weight, and everything under it is subordinate to it. */
+.nb-cell.mirrored .nb-src-view.prose { color: var(--nb-ink); }
+
+/* The compaction summary is prose *about* the session rather than part
+   of it — set apart, and quieter than either. */
+.nb-cell.compact .nb-md { color: var(--nb-muted); font-size: 13px; }
+.nb-cell.compact .nb-body {
+  border-left: 2px solid var(--nb-rule); padding-left: 14px; margin-left: -16px;
+}
+
+/* Long tool results collapse to their first line. Closed, the caret and
+   the line count are the whole affordance. */
+.out.toolres.long { padding: 0 0 0 13px; }
+.out.toolres.long > summary {
+  cursor: pointer; list-style: none; font: 12px var(--nb-mono); color: var(--nb-dim);
+  padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.out.toolres.long > summary::-webkit-details-marker { display: none; }
+.out.toolres.long > summary::before { content: "▸ "; color: var(--nb-muted); }
+.out.toolres.long[open] > summary::before { content: "▾ "; }
+.out.toolres.long > summary .more { color: var(--nb-muted); }
+.out.toolres.long > pre {
+  margin: 4px 0 6px; font: 12.5px/1.55 var(--nb-mono); color: var(--nb-dim);
+  white-space: pre-wrap; word-break: break-word; max-height: 440px; overflow: auto;
+}
+.out.toolres.err, .out.toolres.long.err > summary { color: #f2b3ad; }
+
+/* In a live notebook the prompt is the primary action, so it reads as one
+   — but quietly. A filled accent button here would be the loudest thing on
+   a page whose only colour is meant to be state. */
+.nb-add-row.live .primary {
+  color: var(--nb-ink); border-color: var(--nb-dim);
+}
+.nb-add-row.live .primary:hover { background: rgba(236,232,227,.06); }
+/* Said once, at the point of choosing, and quietly — the answer to "does
+   this reach the agent" is only wanted while deciding which button to
+   press. */
+.nb-add-row .nb-add-note {
+  align-self: center;
+  font: italic 11px/1.4 var(--nb-serif); color: var(--nb-muted);
+}
+
+/* Lives here rather than beside the header dot that also uses it: an
+   approval waiting for an answer is drawn inside a cell, and a cell is
+   drawn on both pages. */
+@keyframes nb-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+
+/* ── Approvals ───────────────────────────────────────────────────────
+   The one block in a document where the reader has to decide something,
+   and therefore the one that gets a border. Everything else on the page
+   is a record of what happened; this is a question, and while it is open
+   the agent is stopped — including for any prompt you try to send, which
+   the CLI would otherwise read as the answer. That is why it is allowed
+   to be the loudest thing in the cell. */
+
+.out.approval {
+  display: grid; grid-template-columns: auto 1fr auto;
+  align-items: center; gap: 10px 12px;
+  border: 1px solid var(--nb-run); border-left-width: 2px; border-radius: 4px;
+  background: rgba(224,164,88,.06);
+  padding: 11px 13px; margin: 10px 0 0;
+}
+.out.approval .mark {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--nb-run);
+}
+.out.approval.open .mark { animation: nb-pulse 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .out.approval.open .mark { animation: none; }
+}
+.out.approval .q {
+  font: 12.5px/1.5 var(--nb-mono); color: var(--nb-ink);
+  min-width: 0; word-break: break-word;
+}
+.out.approval .q .tool {
+  font: 10px var(--nb-mono); text-transform: uppercase; letter-spacing: .1em;
+  color: var(--nb-run); margin-right: 8px;
+}
+.out.approval .q .args {
+  display: block; color: var(--nb-muted); font-size: 11.5px; margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.out.approval .acts { display: flex; gap: 7px; }
+.out.approval .acts button {
+  background: none; border: 1px solid var(--nb-rule); border-radius: 3px;
+  color: var(--nb-dim); font: 11px var(--nb-mono); cursor: pointer; padding: 4px 11px;
+}
+.out.approval .acts button:hover { color: var(--nb-ink); border-color: var(--nb-dim); }
+/* Approve is not styled as the safe default. The agent is asking because
+   the action is consequential, and a green primary button here would be a
+   nudge toward saying yes without reading. */
+.out.approval .acts button.ok:hover { border-color: var(--nb-ok); color: var(--nb-ok); }
+.out.approval .acts button[disabled] { opacity: .4; cursor: default; }
+
+/* Answered: the border goes, because there is nothing left to do. What
+   remains is the record. */
+.out.approval.done {
+  border-color: var(--nb-rule-soft); background: transparent; padding: 7px 0 7px 13px;
+  border-width: 0 0 0 2px; border-radius: 0;
+}
+.out.approval.done .q { color: var(--nb-dim); font-size: 12px; }
+.out.approval.done .mark { background: var(--nb-muted); }
+.out.approval.done.approved .mark { background: var(--nb-ok); }
+.out.approval.done.denied .mark { background: var(--nb-err); }
+.out.approval .verdict {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  text-transform: uppercase; letter-spacing: .1em;
+}
+.out.approval.done.approved .verdict { color: var(--nb-ok); }
+.out.approval.done.denied .verdict { color: var(--nb-err); }
+
+/* ── Fidelity ────────────────────────────────────────────────────────
+   Shown only when something is missing. A banner that appears on every
+   notebook is a banner nobody reads, and the whole point is that this one
+   gets read. Stated in terms of what you can do rather than which flags
+   are set — "its turns are not shown here" is information; "turns:
+   false" is a data dump.
+
+   Where the bar sits is the host page's business — margin in a full-page
+   notebook, a strip under a panel header in the dashboard — so only its
+   appearance is set here. */
+#nb-fidelity {
+  border-left: 2px solid var(--nb-stale);
+  padding: 9px 0 9px 13px;
+}
+#nb-fidelity .what { font: 12.5px/1.6 var(--nb-serif); color: var(--nb-dim); }
+#nb-fidelity .what b { color: var(--nb-ink); font-weight: 400; }
+#nb-fidelity .can { font: 11.5px/1.6 var(--nb-serif); color: var(--nb-muted); margin-top: 3px; }
+
+/* ── Context injections ──────────────────────────────────────────────
+   What the harness put in front of the model that nobody typed. Recorded
+   because an injection you cannot see is often the whole explanation for
+   a surprising turn; collapsed because a turn can carry thirty of them
+   and the document is a conversation, not a context dump. The quietest
+   thing on the page until you go looking for it. */
+.out.inj {
+  border-left-color: var(--nb-rule-soft);
+  padding: 0 0 0 13px; margin-top: 8px;
+}
+.out.inj > summary {
+  cursor: pointer; list-style: none;
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  padding: 2px 0; letter-spacing: .02em;
+}
+.out.inj > summary::-webkit-details-marker { display: none; }
+.out.inj > summary::before { content: "▸ "; }
+.out.inj[open] > summary::before { content: "▾ "; }
+.out.inj > summary:hover { color: var(--nb-dim); }
+.out.inj .inj-total { color: var(--nb-rule); margin-left: 8px; }
+.out.inj > summary:hover .inj-total { color: var(--nb-muted); }
+
+.inj-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 0 12px;
+  padding: 6px 0; border-top: 1px solid var(--nb-rule-soft);
+}
+.inj-label { font: 11px var(--nb-mono); color: var(--nb-dim); }
+.inj-size {
+  font: 10.5px var(--nb-mono); color: var(--nb-muted);
+  font-variant-numeric: tabular-nums;
+}
+.inj-body {
+  grid-column: 1 / -1; margin-top: 3px;
+  font: 11.5px/1.5 var(--nb-mono); color: var(--nb-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* ── Subagents (#55a) ────────────────────────────────────────────────
+   A delegated child, nested under the turn that spawned it. Indented
+   rather than boxed: it is the same kind of content as its parent —
+   messages and tool calls — made by a different agent, and a border
+   would suggest it is a different kind of thing. Collapsed by default
+   because the parent's narrative is what is being read; the child is
+   there for when the answer is surprising. */
+.out.subagent {
+  border-left: 1px dashed var(--nb-rule);
+  padding: 0 0 0 13px; margin: 10px 0 0;
+}
+.out.subagent > summary {
+  cursor: pointer; list-style: none;
+  font: 11px var(--nb-mono); color: var(--nb-dim);
+  padding: 3px 0; display: flex; gap: 10px; align-items: baseline;
+}
+.out.subagent > summary::-webkit-details-marker { display: none; }
+.out.subagent > summary::before { content: "▸"; color: var(--nb-muted); }
+.out.subagent[open] > summary::before { content: "▾"; }
+.out.subagent > summary:hover { color: var(--nb-ink); }
+.sa-kind {
+  color: var(--nb-stale); letter-spacing: .04em;
+}
+.sa-count { color: var(--nb-muted); font-size: 10.5px; }
+
+/* The child's own outputs sit one step further in and a shade quieter,
+   so depth reads as depth without inventing a second visual language. */
+.sa-body { padding-left: 4px; opacity: .92; }
+.sa-body .out { margin-top: 7px; font-size: 12px; }

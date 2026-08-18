@@ -40,6 +40,11 @@ func (c Capabilities) MarshalJSON() ([]byte, error) {
 		"subagentFiles":        c.SubagentFiles,
 		"preCompact":           c.PreCompact,
 		"sessionIdPinning":     c.SessionIDPinning,
+		// #56: the session view is the notebook now, so the frontend needs
+		// to know which adapters can produce one. A session with no
+		// document is either waiting for its first turn or backed by a CLI
+		// whose transcript we cannot read, and those want different words.
+		"transcriptContent": c.TranscriptContent,
 	})
 }
 

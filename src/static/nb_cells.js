@@ -15,8 +15,16 @@ export { CELL_TYPES };
 
 let root;
 
-export function mountCells(el) {
+// hasFocus decides whether an unmodified keypress is a notebook command.
+// On /notebook.html the notebook is the page and the answer is always yes.
+// Embedded in the dashboard it is one panel among several, and Jupyter's
+// command mode binds bare letters: without this, `dd` while reading the
+// activity feed would delete a cell in a document you were not looking at.
+let hasFocus = () => true;
+
+export function mountCells(el, opts = {}) {
   root = el;
+  if (opts.hasFocus) hasFocus = opts.hasFocus;
   onChange(render);
   document.addEventListener("keydown", onKeyDown);
 
@@ -54,10 +62,16 @@ function render() {
   root.innerHTML =
     (nb.cells || []).map((c, i) => renderCell(c, i + 1)).join("") +
     (live
-      ? `<div class="nb-add-row live">
+      ? // ADR 0002 §7 Q2: a note written here cannot reach the agent's
+        // context — the CLI owns that, and there is no wire to widen it.
+        // The two buttons therefore say where their text goes, because a
+        // "+ Note" beside a "+ Ask" reads as a quieter way to say the same
+        // thing, and a margin note the agent never saw is a bad surprise.
+        `<div class="nb-add-row live">
            <button data-add="prompt" class="primary" title="Send this to the agent (⇧Enter)">+ Ask the agent</button>
-           <button data-add="markdown">+ Note</button>
+           <button data-add="markdown" title="A note in the margin. The CLI owns its own context — nothing you write here reaches it.">+ Note</button>
            <button data-add="shell">+ Shell</button>
+           <span class="nb-add-note">notes stay here; only prompts reach the agent</span>
          </div>`
       : `<div class="nb-add-row">
            <button data-add="markdown">+ Markdown</button>
@@ -521,6 +535,7 @@ async function splitCell(ta) {
 
 function onKeyDown(e) {
   if (!state.notebook) return;
+  if (!hasFocus()) return;
 
   // The help overlay closes on Esc or q, matching Jupyter's pager.
   if (helpOpen()) {
@@ -673,12 +688,16 @@ export function toggleHelp(open) {
   if (el) el.classList.toggle("open", open);
 }
 
+// The bar's resting state is `display: none` in the stylesheet, so showing
+// it means setting a value — clearing the inline style just falls back to
+// the rule that hides it, which is why nothing this file reported had ever
+// actually appeared on screen.
 export function showNote(text) {
   const bar = document.getElementById("nb-error");
   if (!bar) return;
   bar.textContent = text;
   bar.classList.add("note");
-  bar.style.display = "";
+  bar.style.display = "block";
   clearTimeout(showError._t);
   showError._t = setTimeout(() => { bar.style.display = "none"; bar.classList.remove("note"); }, 3500);
 }
@@ -688,7 +707,7 @@ export function showError(err) {
   if (!bar) return;
   bar.textContent = String(err?.message || err);
   bar.classList.remove("note");
-  bar.style.display = "";
+  bar.style.display = "block";
   clearTimeout(showError._t);
   showError._t = setTimeout(() => (bar.style.display = "none"), 6000);
 }
