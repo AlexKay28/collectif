@@ -270,6 +270,14 @@ html, body {
 .out.think > pre { margin: 0 0 6px; font: 12.5px/1.55 var(--nb-mono); color: var(--nb-muted); white-space: pre-wrap; }
 .out.tool { display: flex; gap: 9px; align-items: baseline; font: 12px var(--nb-mono); border-left-color: var(--nb-dim); color: var(--nb-ink); }
 .out.tool .tool-args { color: var(--nb-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An MCP call gets the server's name as a chip rather than a colour of its
+   own. It is a fact about where the call went, not a status, and the
+   palette above is spent entirely on states (#54). */
+.out.tool.mcp .mcp-server {
+  flex: none; padding: 1px 5px; border: 1px solid var(--nb-rule);
+  border-radius: 3px; color: var(--nb-muted); font-size: 11px;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .out.diff .d-add { color: var(--nb-ok); display: block; }
 .out.diff .d-del { color: var(--nb-err); display: block; }
 .out.diff .d-hunk { color: var(--nb-dim); display: block; }

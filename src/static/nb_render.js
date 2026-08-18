@@ -276,6 +276,19 @@ function renderOutput(o) {
       // The name lives in data for a projected session and in text for a
       // native run; both shapes reach this renderer.
       const name = d.name || o.text || "tool";
+      // A call that left the machine is not the same event as one that
+      // read a file here, and the wire name buries the difference: the
+      // reader's eye lands on `mcp__plugin_paddle_paddle-live__execute`
+      // and takes it for a long tool name. Naming the server separately is
+      // the whole of what #54's spike found a projection could add — the
+      // transcript already carries it, collectif connects to nothing.
+      if (d.mcpServer) {
+        return `<div class="out tool mcp">` +
+               `<span class="mcp-server" title="MCP server">${escapeHTML(String(d.mcpServer))}</span>` +
+               `<span class="tool-name">→ ${escapeHTML(String(d.mcpTool || name))}</span>` +
+               (toolArgs(d.input) ? `<span class="tool-args">${escapeHTML(toolArgs(d.input))}</span>` : "") +
+               `</div>`;
+      }
       return `<div class="out tool"><span class="tool-name">→ ${escapeHTML(name)}</span>` +
              (toolArgs(d.input) ? `<span class="tool-args">${escapeHTML(toolArgs(d.input))}</span>` : "") +
              `</div>`;

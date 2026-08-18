@@ -255,7 +255,7 @@ const fidelityBar = document.getElementById("nb-fidelity");
 
 function renderFidelity(nb) {
   const f = nb?.fidelity;
-  if (!f || (f.turns && f.approvals && f.send && f.subagents && f.usage)) {
+  if (!f || (f.turns && f.approvals && f.send && f.subagents && f.usage && f.mcp)) {
     fidelityBar.style.display = "none";
     return;
   }
@@ -265,6 +265,10 @@ function renderFidelity(nb) {
   if (!f.approvals) missing.push("permission requests will not appear here");
   if (!f.usage) missing.push("token counts are unavailable");
   if (!f.subagents) missing.push("work it delegates to subagents will not be nested here");
+  // Phrased as what the reader will wrongly conclude rather than as a
+  // missing feature: the calls still appear, so the only visible symptom
+  // of this gap is a session that looks like it never left the machine.
+  if (!f.mcp && f.turns) missing.push("calls to your MCP servers are not marked as such — they will read as built-in tools");
 
   const can = [];
   if (f.send) can.push("send prompts");
