@@ -121,6 +121,16 @@ type TranscriptPart struct {
 	ToolInput json.RawMessage
 	ToolUseID string
 
+	// MCPServer/MCPTool split a call that went out over MCP, and are empty
+	// for every built-in tool and for any adapter that has no convention
+	// for saying so (#54).
+	//
+	// ToolName keeps the full wire name regardless: it is what the model
+	// called, what the result pairs against, and what a reader greps their
+	// own transcript for. These two are a reading aid over it.
+	MCPServer string
+	MCPTool   string
+
 	// IsError marks a failed tool result. The model sees these as ordinary
 	// results and reacts to them, so they are output, not errors.
 	IsError bool
@@ -168,6 +178,56 @@ type TranscriptPart struct {
 	// AgentType is what the child was: an agent type for an Agent call, a
 	// command name for a forked skill.
 	AgentType string
+}
+
+// ─── MCP ────────────────────────────────────────────────────────────────
+
+// mcpNamer is the optional half of CLIAdapter that can tell an MCP call
+// apart from a built-in one. Optional for the same reason subagentLocator
+// is: the `mcp__<server>__<tool>` convention is Claude Code's, no other
+// CLI here has been checked against a real transcript, and an adapter that
+// answered this question from documentation would be inventing exactly the
+// kind of parser #47 P0 exists to have caught.
+type mcpNamer interface {
+	// SplitMCPTool returns the server and tool a call went to, or ok=false
+	// if the name is not one of this CLI's MCP calls.
+	SplitMCPTool(toolName string) (server, tool string, ok bool)
+}
+
+// mcpToolPrefix is the whole of the signal. #54 asked whether a projected
+// session could show what the CLI's own MCP servers were doing without
+// collectif connecting to any of them, and the answer turned on what an
+// MCP call looks like in the transcript: an ordinary `tool_use` block with
+// an ordinary `input` and an ordinary result. No server field, no
+// transport, no duration. Surveyed across every transcript on this
+// machine — 38 MCP calls among 39 840 tool calls — the name is the only
+// thing that distinguishes one, and it is enough.
+const mcpToolPrefix = "mcp__"
+
+// SplitMCPTool takes `mcp__<server>__<tool>` apart on the *first* double
+// underscore after the prefix. That is the only reading under which all 72
+// distinct MCP names in this machine's transcripts come apart correctly:
+// server names carry single underscores (`claude_ai_Google_Calendar`,
+// `plugin_paddle_paddle-live`) and so do tool names
+// (`search_paddle_knowledge_sources`), but no name in the corpus carries a
+// second double underscore.
+//
+// It fails closed. `mcp__claude-in-chrome__` and `mcp__claude_ai_` both
+// occur here — in prose and skill listings rather than as tool names, but
+// they occur — and half a name must not become an attribution. A call
+// shown under its plain name is a small loss; a call credited to a server
+// the user does not have is the second-hand knowledge ADR 0001 §1 was
+// written about.
+func (a *claudeAdapter) SplitMCPTool(toolName string) (server, tool string, ok bool) {
+	rest, found := strings.CutPrefix(toolName, mcpToolPrefix)
+	if !found {
+		return "", "", false
+	}
+	server, tool, found = strings.Cut(rest, "__")
+	if !found || server == "" || tool == "" {
+		return "", "", false
+	}
+	return server, tool, true
 }
 
 // ─── Claude Code ────────────────────────────────────────────────────────
@@ -471,6 +531,10 @@ func (a *claudeAdapter) ProjectTranscriptLine(raw []byte) ([]TranscriptPart, err
 			p.ToolName = b.Name
 			p.ToolUseID = b.ID
 			p.ToolInput = b.Input
+			// A failed split leaves both empty, and the call renders as
+			// any other. Only the result is paired by id, so nothing about
+			// a missed attribution costs the reader the call itself.
+			p.MCPServer, p.MCPTool, _ = a.SplitMCPTool(b.Name)
 
 		case "tool_result":
 			if b.ToolUseID == "" {

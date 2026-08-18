@@ -52,6 +52,14 @@ type NotebookFidelity struct {
 	// as one that did nothing between its tool call and its result, which
 	// is a far more misleading absence than a missing token count.
 	Subagents bool `json:"subagents"`
+
+	// MCP is whether a call that went out to one of the user's own MCP
+	// servers is shown as one (#54). False does not mean the session made
+	// no MCP calls — it means we cannot tell which of its calls were, so
+	// every one of them reads as built-in. That is the more dangerous
+	// absence of the two: a reader who cannot see the distinction assumes
+	// there was none.
+	MCP bool `json:"mcp"`
 }
 
 // fidelityOf maps an adapter's capabilities onto the surfaces a person
@@ -63,6 +71,7 @@ func fidelityOf(a CLIAdapter) NotebookFidelity {
 	}
 	caps := a.Capabilities()
 	_, locates := a.(subagentLocator)
+	_, namesMCP := a.(mcpNamer)
 	return NotebookFidelity{
 		CLI:       a.Name(),
 		Turns:     caps.TranscriptContent,
@@ -72,6 +81,11 @@ func fidelityOf(a CLIAdapter) NotebookFidelity {
 		// Both halves are required: knowing where the children are, and
 		// being able to read them once found.
 		Subagents: caps.SubagentFiles && caps.TranscriptContent && locates,
+		// Likewise both halves: knowing the CLI's namespacing convention
+		// is worth nothing on a CLI whose tool calls are not projected at
+		// all. #54's whole finding is that MCP needs no capability of its
+		// own beyond being able to read the tool call it rode in on.
+		MCP: caps.TranscriptContent && namesMCP,
 	}
 }
 

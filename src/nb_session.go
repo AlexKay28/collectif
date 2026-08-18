@@ -253,6 +253,12 @@ func (p *sessionProjector) apply(part TranscriptPart) bool {
 			"name":       part.ToolName,
 			"toolUseId":  part.ToolUseID,
 		}
+		// Absent rather than empty on a built-in call, so the renderer's
+		// test is "did this go somewhere else" rather than a string
+		// comparison against "".
+		if part.MCPServer != "" {
+			data["mcpServer"], data["mcpTool"] = part.MCPServer, part.MCPTool
+		}
 		// The input is the CLI's JSON. It is carried through as decoded
 		// values so the renderer can show a command as a command rather
 		// than as an escaped string.
@@ -795,6 +801,9 @@ func subagentOutput(part TranscriptPart, agentID, agentType string) (Output, boo
 	case PartToolCall:
 		data["name"] = part.ToolName
 		data["toolUseId"] = part.ToolUseID
+		if part.MCPServer != "" {
+			data["mcpServer"], data["mcpTool"] = part.MCPServer, part.MCPTool
+		}
 		if len(part.ToolInput) > 0 {
 			var in any
 			if json.Unmarshal(part.ToolInput, &in) == nil {
